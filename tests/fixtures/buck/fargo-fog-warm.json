@@ -1,0 +1,256 @@
+{
+  "format": "buck",
+  "formatVersion": "1.0",
+  "minReaderVersion": "1.0",
+  "meta": {
+    "name": "Fargo Winter · Nebel hinten · Warmlicht links",
+    "generator": "Buckswood Auto LUT (Entwurf)",
+    "created": "2026-10-30T12:00:00Z",
+    "prompt": "Fargo-Look, Nebel im Hintergrund, warmes Licht von links",
+    "thumbnails": {
+      "before": "thumbs/before.jpg",
+      "after": "thumbs/after.jpg"
+    }
+  },
+  "colorManagement": {
+    "config": "ofx-native-v1.5_aces-v1.3_ocio-v2.3",
+    "input": "Rec.1886 Rec.709 - Display",
+    "output": "Rec.1886 Rec.709 - Display",
+    "working": {
+      "linear": "ACEScg",
+      "display": "Rec.1886 Rec.709 - Display"
+    }
+  },
+  "inputs": {
+    "depth": {
+      "kind": "depth",
+      "semantics": "relative-inverse",
+      "required": false,
+      "sources": [
+        {
+          "type": "host-clip",
+          "clip": "Depth"
+        },
+        {
+          "type": "cache"
+        },
+        {
+          "type": "estimate",
+          "model": "vda-small-rel@1"
+        }
+      ],
+      "normalize": {
+        "mode": "shot-percentile",
+        "low": 2,
+        "high": 98
+      },
+      "onMissing": "bypass-dependents"
+    },
+    "normals": {
+      "kind": "normals",
+      "frame": "camera",
+      "required": false,
+      "sources": [
+        {
+          "type": "host-clip",
+          "clip": "Normals"
+        },
+        {
+          "type": "cache"
+        },
+        {
+          "type": "derive",
+          "method": "normals-from-depth@1",
+          "from": "depth",
+          "params": {
+            "smoothing": 0.002
+          }
+        }
+      ],
+      "onMissing": "bypass-dependents"
+    }
+  },
+  "models": {
+    "vda-small-rel@1": {
+      "name": "Video-Depth-Anything-Small (relativ)",
+      "upstream": "https://github.com/DepthAnything/Video-Depth-Anything",
+      "revision": "PLATZHALTER-git-commit",
+      "license": "Apache-2.0",
+      "format": "onnx",
+      "opset": 17,
+      "weightsSha256": "PLATZHALTER-sha256-der-onnx-datei",
+      "output": "relative-inverse",
+      "preprocess": {
+        "longSide": 518,
+        "multipleOf": 14,
+        "resize": "bicubic",
+        "inputSpace": "sRGB - Texture",
+        "mean": [
+          0.485,
+          0.456,
+          0.406
+        ],
+        "std": [
+          0.229,
+          0.224,
+          0.225
+        ]
+      },
+      "temporal": {
+        "windowFrames": 32,
+        "overlapFrames": 8
+      },
+      "postprocess": {
+        "resize": "bilinear-to-source"
+      }
+    }
+  },
+  "nodes": [
+    {
+      "id": "toLinear",
+      "type": "color.convert@1",
+      "inputs": {
+        "image": "$source"
+      },
+      "params": {
+        "from": "Rec.1886 Rec.709 - Display",
+        "to": "ACEScg"
+      }
+    },
+    {
+      "id": "nearMask",
+      "type": "mask.depthRange@1",
+      "inputs": {
+        "depth": "$depth"
+      },
+      "params": {
+        "near": 0.0,
+        "far": 0.6,
+        "feather": 0.12,
+        "invert": false
+      }
+    },
+    {
+      "id": "warmKey",
+      "type": "light.relight@1",
+      "label": "Warmes Licht von links",
+      "inputs": {
+        "image": "toLinear",
+        "normals": "$normals",
+        "mask": "nearMask"
+      },
+      "params": {
+        "azimuth": -70,
+        "elevation": 20,
+        "color": {
+          "kelvin": 3200
+        },
+        "intensity": 0.8,
+        "softness": 0.6,
+        "mode": "add",
+        "preserveHighlights": 0.7
+      },
+      "amount": 1
+    },
+    {
+      "id": "bgMask",
+      "type": "mask.depthRange@1",
+      "inputs": {
+        "depth": "$depth"
+      },
+      "params": {
+        "near": 0.55,
+        "far": 1.0,
+        "feather": 0.15,
+        "invert": false
+      }
+    },
+    {
+      "id": "fog",
+      "type": "atmos.fog@1",
+      "label": "Nebel im Hintergrund",
+      "inputs": {
+        "image": "warmKey",
+        "depth": "$depth",
+        "mask": "bgMask"
+      },
+      "params": {
+        "model": "exponential",
+        "start": 0.55,
+        "density": 2.2,
+        "color": [
+          0.78,
+          0.84,
+          0.92
+        ],
+        "luminance": 1.6,
+        "maxOpacity": 0.75,
+        "skyProtect": 0.3
+      }
+    },
+    {
+      "id": "toDisplay",
+      "type": "color.convert@1",
+      "inputs": {
+        "image": "fog"
+      },
+      "params": {
+        "from": "ACEScg",
+        "to": "Rec.1886 Rec.709 - Display"
+      }
+    },
+    {
+      "id": "fargo",
+      "type": "color.look@1",
+      "label": "Fargo · kalte Winterpalette, sauberes Schnee-Weiß",
+      "inputs": {
+        "image": "toDisplay"
+      },
+      "params": {
+        "space": "Rec.1886 Rec.709 - Display",
+        "look": {
+          "shadows": [
+            -0.030672,
+            0.005846,
+            0.032405
+          ],
+          "midtones": [
+            -0.004179,
+            0.000107,
+            0.011248
+          ],
+          "highlights": [
+            0,
+            0,
+            0
+          ],
+          "whiteClean": 0.8,
+          "skinProtect": 0.6,
+          "skinHue": 0,
+          "key": 0.2,
+          "contrast": -0.05,
+          "saturation": -0.25
+        },
+        "skinProtection": 0.6,
+        "prompt": "Fargo-Look",
+        "understood": [
+          "Basis: Fargo · kalte Winterpalette, sauberes Schnee-Weiß"
+        ],
+        "bakedLut": "luts/fargo_look_rec709_64.cube"
+      }
+    }
+  ],
+  "output": "fargo",
+  "fallback": {
+    "cube": "luts/fargo_look_rec709_64.cube",
+    "inputSpace": "Rec.1886 Rec.709 - Display",
+    "outputSpace": "Rec.1886 Rec.709 - Display",
+    "covers": [
+      "fargo"
+    ],
+    "omits": [
+      "warmKey",
+      "fog"
+    ]
+  }
+}
