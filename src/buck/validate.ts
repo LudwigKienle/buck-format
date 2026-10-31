@@ -1,5 +1,5 @@
 import type { BuckGraph, BuckNode, NodeType, PortKind, SpaceName } from './types';
-import { BuckError, LIMITS, LINEAR_SPACES, OFX_CONFIG, PORTS, SPACE_NAMES } from './types';
+import { BuckError, LIMITS, LINEAR_SPACES, OFX_CONFIG, PORTS, SKY_PRESETS, SPACE_NAMES } from './types';
 /**
  * Strict reader for graph.json (docs/BUCK_FORMAT.md §4–§6, §11). checkGraph collects every problem as a German
  * sentence in a fixed order; parseGraph throws the first one. Structural rules are mirrored in docs/schema/buck-1.0.schema.json.
@@ -22,7 +22,7 @@ export const PARAM_RANGES:Record<NodeType,Record<string,Range>>={
   'atmos.fog@1':{start:DEPTH,end:DEPTH,density:[0,20],color:LIN_COLOR,'color.kelvin':KELVIN,luminance:EV,maxOpacity:UNIT,skyProtect:UNIT},
   // f/0.5 is the aplanatic limit in air (NA = 1); sensor/focal bounds cover large format with margin.
   'lens.dof@1':{focus:UNIT,focusRange:UNIT,blurNear:BLUR,blurFar:BLUR,focusDistance:[.01,1e4],fNumber:[.5,128],focalLength:[1,2000],sensorWidth:[1,100],maxBlur:BLUR,blades:[0,12],rotation:[-360,360],bladeCurvature:UNIT,catEye:UNIT,highlightBoost:UNIT},
-  'light.relight@1':{azimuth:[-180,180],elevation:[-90,90],color:LIN_COLOR,'color.kelvin':KELVIN,intensity:EV,softness:UNIT,preserveHighlights:UNIT},
+  'light.relight@1':{azimuth:[-180,180],elevation:[-90,90],color:LIN_COLOR,'color.kelvin':KELVIN,intensity:EV,softness:UNIT,preserveHighlights:UNIT,skinProtect:UNIT},
   // §9.2: depthRange needs feather >= 0.02 depth units.
   'mask.depthRange@1':{near:DEPTH,far:DEPTH,feather:[.02,1e4]},
   'mask.gradient@1':{start:POINT,end:POINT,center:POINT,radius:[0,4],feather:[0,4]},
@@ -31,16 +31,28 @@ export const PARAM_RANGES:Record<NodeType,Record<string,Range>>={
   'mask.image@1':{},
   'mask.combine@1':{},
   'mask.refine@1':{blur:BLUR,grow:[-.05,.05],gamma:[0,10]},
+  // Sky/practicals bounds are safety bounds of this implementation (coordinates in image widths, y up to H/W).
+  'sky.replace@1':{zenith:LIN_COLOR,'zenith.kelvin':KELVIN,horizon:LIN_COLOR,'horizon.kelvin':KELVIN,horizonY:[-1,2],gradientPower:[.05,10],exposure:EV,
+    glow:[0,8],glowColor:LIN_COLOR,'glowColor.kelvin':KELVIN,stars:UNIT,milkyWay:UNIT,clouds:UNIT,cloudContrast:UNIT,cloudScale:[.01,4],cloudColor:LIN_COLOR,'cloudColor.kelvin':KELVIN,
+    aurora:[0,4],'moon.x':[-1,2],'moon.height':[-1,2],'moon.radius':[.001,.2],'moon.intensity':EV,'moon.color':LIN_COLOR,'moon.color.kelvin':KELVIN,skyDepth:DEPTH,edge:BLUR,spill:UNIT},
+  'light.practicals@1':{threshold:[.001,16],softness:[0,4],contrast:[0,6],minSize:BLUR,maxSize:[0,.25],intensity:EV,glow:[0,8],glowRadius:[0,.1],throw:[0,.5],falloff:[0,3],
+    color:LIN_COLOR,'color.kelvin':KELVIN,recolor:UNIT,'points.x':[-1,2],'points.y':[-1,2],'points.radius':[.001,.2],'points.intensity':EV,'points.color':LIN_COLOR,'points.color.kelvin':KELVIN},
+  // Optics (§5.3.6–§5.3.8): safety bounds of this implementation. Grain size 0.0002…0.01 image widths ≈ 0.4…19 px at 1920 px.
+  'lens.vignette@1':{strength:SIGNED,exposure:[-8,4],radius:[0,2],softness:[0,2],roundness:UNIT,center:POINT},
+  'film.grain@1':{size:[.0002,.01],intensity:[0,2],response:UNIT,chroma:UNIT,seed:[0,65535]},
+  'film.halation@1':{threshold:[.01,16],knee:[0,6],radius:[0,.1],intensity:[0,4],color:LIN_COLOR,'color.kelvin':KELVIN,bloom:[0,2],bloomRadius:[0,.1]},
 };
 /** Parameters whose lower bound is exclusive (CDL power > 0, §9.2 feather/softness > 0, positive radius and gamma). */
 const EXCLUSIVE_MIN=new Set(['color.cdl@1:power','mask.gradient@1:radius','mask.gradient@1:feather','mask.luma@1:softness','mask.refine@1:gamma']);
 
-type Kind='num'|'int'|'anim'|'rgb'|'color'|'point'|'bool'|'space'|'enum'|'text'|'texts'|'file'|'look'|'inputRef';
-interface Field {k:Kind;opt?:boolean;of?:readonly string[];re?:RegExp}
+type Kind='num'|'int'|'anim'|'rgb'|'color'|'point'|'bool'|'space'|'enum'|'text'|'texts'|'file'|'look'|'inputRef'|'object'|'list';
+/** `fields`: closed sub-object ('object', or every item of a 'list' with at most `max` items); ranges as `name.field`. */
+interface Field {k:Kind;opt?:boolean;of?:readonly string[];re?:RegExp;fields?:Record<string,Field>;max?:number}
 const f=(k:Kind,extra:Omit<Field,'k'>={}):Field=>({k,...extra}),o=(k:Kind,extra:Omit<Field,'k'>={}):Field=>({k,opt:true,...extra});
 const LUT_FILE=/^luts\/[a-z0-9_-][a-z0-9._-]{0,99}\.cube$/,MASK_FILE=/^masks\/[a-z0-9_-][a-z0-9._-]{0,99}\.png$/;
+const SKY_FILE=/^skies\/[a-z0-9_-][a-z0-9._-]{0,99}\.png$/;
 const THUMB_FILE=/^thumbs\/[a-z0-9_-][a-z0-9._-]{0,99}\.(jpg|jpeg|png)$/,RECIPE_FILE=/^meta\/[a-z0-9_-][a-z0-9._-]{0,99}\.json$/;
-const PATH_HINTS=new Map<RegExp,string>([[LUT_FILE,'luts/<name>.cube'],[MASK_FILE,'masks/<name>.png'],[THUMB_FILE,'thumbs/<name>.jpg|.png'],[RECIPE_FILE,'meta/<name>.json']]);
+const PATH_HINTS=new Map<RegExp,string>([[LUT_FILE,'luts/<name>.cube'],[MASK_FILE,'masks/<name>.png'],[THUMB_FILE,'thumbs/<name>.jpg|.png'],[RECIPE_FILE,'meta/<name>.json'],[SKY_FILE,'skies/<name>.png']]);
 const ANIM=f('anim');
 const SPECS:Record<NodeType,Record<string,Field>>={
   'color.convert@1':{from:f('space'),to:f('space')},
@@ -49,7 +61,7 @@ const SPECS:Record<NodeType,Record<string,Field>>={
   'color.lut3d@1':{file:f('file',{re:LUT_FILE}),inputSpace:f('space'),outputSpace:f('space')},
   'atmos.fog@1':{model:f('enum',{of:['exponential','linear']}),start:ANIM,end:o('anim'),density:ANIM,color:f('color'),luminance:ANIM,maxOpacity:ANIM,skyProtect:ANIM},
   'lens.dof@1':{mode:f('enum',{of:['artistic','physical']}),focus:o('anim'),focusRange:o('anim'),blurNear:o('anim'),blurFar:o('anim'),focusDistance:o('anim'),fNumber:o('anim'),focalLength:o('anim'),sensorWidth:o('anim'),maxBlur:ANIM,blades:f('int'),rotation:ANIM,bladeCurvature:ANIM,catEye:ANIM,highlightBoost:ANIM},
-  'light.relight@1':{azimuth:ANIM,elevation:ANIM,color:f('color'),intensity:ANIM,softness:ANIM,mode:f('enum',{of:['add']}),preserveHighlights:ANIM},
+  'light.relight@1':{azimuth:ANIM,elevation:ANIM,color:f('color'),intensity:ANIM,softness:ANIM,mode:f('enum',{of:['add']}),preserveHighlights:ANIM,skinProtect:o('anim')},
   'mask.depthRange@1':{near:ANIM,far:ANIM,feather:ANIM,invert:f('bool')},
   'mask.gradient@1':{shape:f('enum',{of:['linear','radial']}),start:o('point'),end:o('point'),center:o('point'),radius:o('anim'),feather:ANIM,invert:f('bool')},
   'mask.luma@1':{low:ANIM,high:ANIM,softness:ANIM,space:f('space')},
@@ -57,6 +69,14 @@ const SPECS:Record<NodeType,Record<string,Field>>={
   'mask.image@1':{file:f('file',{re:MASK_FILE}),fit:f('enum',{of:['stretch','contain','cover']})},
   'mask.combine@1':{op:f('enum',{of:['multiply','max','min','subtract','screen']})},
   'mask.refine@1':{blur:ANIM,grow:ANIM,gamma:ANIM},
+  'sky.replace@1':{source:f('enum',{of:['procedural','image']}),preset:f('enum',{of:SKY_PRESETS}),zenith:f('color'),horizon:f('color'),horizonY:o('anim'),gradientPower:ANIM,exposure:ANIM,
+    glow:ANIM,glowColor:f('color'),stars:ANIM,milkyWay:ANIM,clouds:ANIM,cloudContrast:ANIM,cloudScale:ANIM,cloudColor:f('color'),aurora:ANIM,
+    moon:o('object',{fields:{x:f('num'),height:ANIM,radius:ANIM,intensity:ANIM,color:o('color')}}),file:o('file',{re:SKY_FILE}),skyDepth:ANIM,edge:ANIM,spill:ANIM},
+  'light.practicals@1':{threshold:ANIM,softness:ANIM,contrast:ANIM,minSize:ANIM,maxSize:ANIM,intensity:ANIM,glow:ANIM,glowRadius:ANIM,throw:ANIM,falloff:ANIM,color:f('color'),recolor:ANIM,
+    points:o('list',{max:8,fields:{x:f('num'),y:f('num'),radius:ANIM,intensity:ANIM,color:o('color')}})},
+  'lens.vignette@1':{strength:o('anim'),exposure:o('anim'),radius:ANIM,softness:ANIM,roundness:ANIM,center:o('point')},
+  'film.grain@1':{size:ANIM,intensity:ANIM,response:ANIM,chroma:ANIM,seed:f('int'),animate:f('bool')},
+  'film.halation@1':{threshold:ANIM,knee:ANIM,radius:ANIM,intensity:ANIM,color:f('color'),bloom:ANIM,bloomRadius:o('anim')},
 };
 const LOOK_FIELDS=['shadows','midtones','highlights','whiteClean','skinProtect','skinHue','key','contrast','saturation'] as const;
 
@@ -151,6 +171,15 @@ function checkField(type:NodeType,name:string,spec:Field,v:unknown,where:string,
       for(const k of LOOK_FIELDS)if(has(v,k)){const r=PARAM_RANGES[type][`look.${k}`];k==='shadows'||k==='midtones'||k==='highlights'?triple(v[k],r,false,sub(where,k),err):num(v[k],r,false,sub(where,k),err);}
       return;
     }
+    case 'object':{
+      if(!isObj(v))return err(`${where} muss ein Objekt sein.`);
+      const fields=spec.fields!;closed(v,Object.keys(fields),where,err);need(v,Object.keys(fields).filter(k=>!fields[k].opt),where,err);
+      for(const [k,fs] of Object.entries(fields))if(has(v,k))checkField(type,`${name}.${k}`,fs,v[k],sub(where,k),err,declared);
+      return;
+    }
+    case 'list':
+      if(!Array.isArray(v)||v.length>spec.max!)return err(`${where} muss eine Liste mit höchstens ${spec.max} Einträgen sein.`);
+      return v.forEach((x,i)=>checkField(type,name,{k:'object',fields:spec.fields},x,`${where}[${i}]`,err,declared));
     case 'inputRef':{
       const name2=typeof v==='string'&&v.startsWith('$')?v.slice(1):undefined,decl=name2!==undefined&&has(declared,name2)?declared[name2]:undefined;
       if(!isObj(decl)||decl.kind!=='mask')err(`${where} muss mit „$name“ auf eine deklarierte Eingabe der Art „mask“ verweisen, ist aber ${q(v)}.`);
@@ -181,6 +210,9 @@ function checkParams(type:NodeType,p:unknown,where:string,err:Report,declared:Ob
       if(Number.isInteger(p.blades)&&(p.blades as number)>0&&(p.blades as number)<5)err(`${where}: Parameter „blades“ muss 0 (Kreis) oder 5 bis 12 sein.`);
       break;
     case 'mask.depthRange@1':ordered('near','far',false);break;
+    case 'sky.replace@1':if(p.source==='image')requireFor('image',['file']);break;
+    case 'light.practicals@1':ordered('minSize','maxSize',true);break;
+    case 'lens.vignette@1':if(has(p,'strength')===has(p,'exposure'))err(`${where}: Genau einer der Parameter „strength“ (Faktor) oder „exposure“ (EV) muss gesetzt sein.`);break;
     case 'mask.luma@1':ordered('low','high',false);break;
     case 'mask.gradient@1':
       if(p.shape==='linear'){requireFor('linear',['start','end']);if(Array.isArray(p.start)&&Array.isArray(p.end)&&p.start[0]===p.end[0]&&p.start[1]===p.end[1])err(`${where}: Start- und Endpunkt des Verlaufs dürfen nicht gleich sein.`);}

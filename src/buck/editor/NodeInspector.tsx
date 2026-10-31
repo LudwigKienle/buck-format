@@ -1,12 +1,13 @@
 import { useRef, useState } from 'react';
 import type { ChangeEvent } from 'react';
-import { Eraser, FileUp, Info } from 'lucide-react';
+import { Eraser, FileUp, Info, Plus, Trash2 } from 'lucide-react';
 import { lumaWeights, isLinearSpace } from '../colorspace';
 import { PARAM_RANGES } from '../validate';
 import { parseCube } from '../nodes/color';
 import { decodeMaskPng } from '../nodes/masks';
-import { BuckError, LIMITS, PORTS, SPACE_NAMES } from '../types';
-import type { Animatable, BuckGraph, BuckNode, NodeOf, NodeParamMap, NodeType, RGB } from '../types';
+import { SKY_PRESET_LABELS, decodeSkyPng, skyPresetParams } from '../nodes/sky';
+import { BuckError, LIMITS, PORTS, SKY_PRESETS, SPACE_NAMES } from '../types';
+import type { Animatable, BuckGraph, BuckNode, NodeOf, NodeParamMap, NodeType, PracticalPoint, RGB, SkyMoon, SkyPreset } from '../types';
 import { addNode, defaultNode, isAutoNode, maskNodes, setMask } from './chain';
 import { AnimField, CheckField, ColorField, Hint, NumberField, PointField, RGBField, Section, SelectField, TextField, catalogEntry, nodeTitle, options } from './controls';
 import type { NumberFieldProps, Range } from './controls';
@@ -51,7 +52,7 @@ export function zeroLuma(t:RGB,[min,max]:Range):RGB{
 const EXCLUSIVE=new Set(['color.cdl@1:power','mask.gradient@1:radius','mask.gradient@1:feather','mask.luma@1:softness','mask.refine@1:gamma']);
 // UI start values for physical DOF (no defaults in chain.ts): full-frame sensor 36 mm wide, 50 mm lens, f/2.8, 3 m.
 const PHYSICAL={focusDistance:3,fNumber:2.8,focalLength:50,sensorWidth:36};
-const LUT_FILE=/^luts\/[a-z0-9_-][a-z0-9._-]{0,99}\.cube$/,MASK_FILE=/^masks\/[a-z0-9_-][a-z0-9._-]{0,99}\.png$/;
+const LUT_FILE=/^luts\/[a-z0-9_-][a-z0-9._-]{0,99}\.cube$/,MASK_FILE=/^masks\/[a-z0-9_-][a-z0-9._-]{0,99}\.png$/,SKY_FILE=/^skies\/[a-z0-9_-][a-z0-9._-]{0,99}\.png$/;
 const DISPLAY_SPACES=SPACE_NAMES.filter(s=>!isLinearSpace(s));
 const SPACE_OPTS=options(SPACE_NAMES),DISPLAY_OPTS=options(DISPLAY_SPACES);
 const LABEL_MAX=100;
@@ -60,14 +61,15 @@ const LABEL_MAX=100;
  * Validates a user-picked .cube or mask PNG with the reader's limits (parseCube; decodeMaskPng incl. the PNG gate of png.ts) and
  * returns its archive path: luts/<name>.cube or masks/<name>.png from the file name, suffixed -2, -3 … when another file holds it.
  */
-export function archivePath(kind:'lut'|'mask',fileName:string,bytes:Uint8Array,files:ReadonlyMap<string,Uint8Array>):string {
+export function archivePath(kind:'lut'|'mask'|'sky',fileName:string,bytes:Uint8Array,files:ReadonlyMap<string,Uint8Array>):string {
   if(bytes.length>LIMITS.entryBytes)throw new BuckError(`„${fileName}“ ist größer als 64 MiB.`);
-  const [dir,ext,re]=kind==='lut'?['luts','.cube',LUT_FILE]:['masks','.png',MASK_FILE];
-  const stem=fileName.toLowerCase().replace(/\.[^.]*$/,'').replace(/[^a-z0-9._-]+/g,'_').replace(/^[^a-z0-9_-]+/,'').slice(0,90)||(kind==='lut'?'lut':'maske');
+  const [dir,ext,re]=kind==='lut'?['luts','.cube',LUT_FILE]:kind==='sky'?['skies','.png',SKY_FILE]:['masks','.png',MASK_FILE];
+  const stem=fileName.toLowerCase().replace(/\.[^.]*$/,'').replace(/[^a-z0-9._-]+/g,'_').replace(/^[^a-z0-9_-]+/,'').slice(0,90)||(kind==='lut'?'lut':kind==='sky'?'himmel':'maske');
   if(kind==='lut'){
     let text:string;try{text=new TextDecoder('utf-8',{fatal:true}).decode(bytes);}catch{throw new BuckError(`„${fileName}“ ist kein gültiges UTF-8.`);}
     parseCube(text);
-  }else decodeMaskPng(bytes,fileName);
+  }else if(kind==='sky')decodeSkyPng(bytes,fileName);
+  else decodeMaskPng(bytes,fileName);
   const same=(a:Uint8Array,b:Uint8Array)=>a.length===b.length&&a.every((x,i)=>x===b[i]);
   for(let i=1;;i++){
     const path=`${dir}/${stem}${i>1?`-${i}`:''}${ext}`,held=files.get(path);
@@ -77,7 +79,7 @@ export function archivePath(kind:'lut'|'mask',fileName:string,bytes:Uint8Array,f
 }
 type SetFile=(path:string,bytes:Uint8Array)=>void;
 /** Archive file of a lut3d/mask.image node: presence, size and an upload button (only when the editor passes setFile). */
-function ArchiveFile({kind,path,files,setFile,onPath}:{kind:'lut'|'mask';path:string;files?:ReadonlyMap<string,Uint8Array>;setFile?:SetFile;onPath:(p:string)=>void}){
+function ArchiveFile({kind,path,files,setFile,onPath}:{kind:'lut'|'mask'|'sky';path:string;files?:ReadonlyMap<string,Uint8Array>;setFile?:SetFile;onPath:(p:string)=>void}){
   const input=useRef<HTMLInputElement>(null),[error,setError]=useState<string>(),held=files?.get(path);
   async function pick(e:ChangeEvent<HTMLInputElement>){
     const f=e.target.files?.[0];e.target.value='';if(!f||!setFile||!files)return;
@@ -91,8 +93,8 @@ function ArchiveFile({kind,path,files,setFile,onPath}:{kind:'lut'|'mask';path:st
   return <>
     {files&&(held?<Hint>Im Paket: {held.length.toLocaleString('de-DE')} Byte.</Hint>:<Hint tone="warn">„{path}“ fehlt im Paket. Ohne Datei lässt sich der Knoten nicht rendern und der Look nicht speichern.</Hint>)}
     {setFile&&<>
-      <input ref={input} type="file" hidden accept={kind==='lut'?'.cube':'.png,image/png'} onChange={e=>void pick(e)} aria-label={kind==='lut'?'.cube-Datei wählen':'Maskenbild wählen'}/>
-      <button type="button" className="buck-button buck-tool" onClick={()=>input.current?.click()}><FileUp size={14}/>{kind==='lut'?'.cube-Datei laden':'PNG-Maske laden'}</button>
+      <input ref={input} type="file" hidden accept={kind==='lut'?'.cube':'.png,image/png'} onChange={e=>void pick(e)} aria-label={kind==='lut'?'.cube-Datei wählen':kind==='sky'?'Himmelsbild wählen':'Maskenbild wählen'}/>
+      <button type="button" className="buck-button buck-tool" onClick={()=>input.current?.click()}><FileUp size={14}/>{kind==='lut'?'.cube-Datei laden':kind==='sky'?'Himmel-PNG laden':'PNG-Maske laden'}</button>
     </>}
     {error&&<p className="buck-error" role="alert">{error}</p>}
   </>;
@@ -168,6 +170,11 @@ function renderForm(node:BuckNode,props:<T extends NodeType>(n:NodeOf<T>)=>FormP
     case 'atmos.fog@1':return <FogForm {...props(node)}/>;
     case 'lens.dof@1':return <DofForm {...props(node)}/>;
     case 'light.relight@1':return <RelightForm {...props(node)}/>;
+    case 'sky.replace@1':return <SkyForm {...props(node)}/>;
+    case 'light.practicals@1':return <PracticalsForm {...props(node)}/>;
+    case 'lens.vignette@1':return <VignetteForm {...props(node)}/>;
+    case 'film.grain@1':return <GrainForm {...props(node)}/>;
+    case 'film.halation@1':return <HalationForm {...props(node)}/>;
     case 'mask.depthRange@1':return <DepthRangeForm {...props(node)}/>;
     case 'mask.gradient@1':return <GradientForm {...props(node)}/>;
     case 'mask.luma@1':return <LumaForm {...props(node)}/>;
@@ -309,9 +316,9 @@ function DofForm({node,set,merge,graph}:FormProps<'lens.dof@1'>){
   </>;
 }
 
-function RelightForm({node,set,graph}:FormProps<'light.relight@1'>){
+function RelightForm({node,set,edit,graph}:FormProps<'light.relight@1'>){
   const t='light.relight@1',p=node.params;
-  return <Section title="Licht">
+  return <><Section title="Licht">
     {linearHint(graph)}
     {anim(node,set,'azimuth','Azimut (−90 links, +90 rechts)',{unit:'°',step:1})}
     {anim(node,set,'elevation','Höhe',{unit:'°',step:1})}
@@ -320,7 +327,168 @@ function RelightForm({node,set,graph}:FormProps<'light.relight@1'>){
     {anim(node,set,'softness','Weichheit')}
     <SelectField label="Modus" value={p.mode} options={[{value:'add',label:'Hinzufügen'}]} onChange={v=>set('mode',v)}/>
     {anim(node,set,'preserveHighlights','Lichter schützen')}
+  </Section>
+  <Section title="Haut">
+    {/* UI start value 0.8 when switched on (editorial). Without the field the node renders exactly as before (§5.3.3). */}
+    <CheckField label="Hauttöne schützen" checked={p.skinProtect!==undefined} onChange={on=>on?set('skinProtect',.8):dropParam(edit,'skinProtect')}/>
+    {anim(node,set,'skinProtect','Hautschutz')}
+    <Hint>Weicher Farbschlüssel wie im Look (kein Gesichtserkenner): Auf Hauttönen wird die Lichtfarbe neutraler und das zusätzliche Licht schwächer.</Hint>
+  </Section></>;
+}
+
+/** Removes an optional parameter (an undefined value would fail validation). */
+const dropParam=(edit:Edit,key:string)=>edit(n=>{const params={...n.params} as Record<string,unknown>;delete params[key];return {...n,params} as unknown as BuckNode;});
+const SKY_OPTS=SKY_PRESETS.map(v=>({value:v,label:SKY_PRESET_LABELS[v].label}));
+// UI start values when the moon is switched on; they match the "Nacht" preset.
+const MOON_DEFAULT:SkyMoon={x:.72,height:.16,radius:.018,intensity:1.6,color:{kelvin:4100}};
+function SkyForm({node,set,merge,edit,graph,files,setFile}:FormProps<'sky.replace@1'>){
+  const t='sky.replace@1',p=node.params,space=graph.colorManagement.working.linear,moon=p.moon;
+  // A preset replaces the look of the sky; source, file, horizon, depth threshold and edge stay as they are.
+  const choose=(v:SkyPreset)=>edit(n=>{
+    if(n.type!==t)return n;
+    const {source:_s,skyDepth:_d,edge:_e,...look}=skyPresetParams(v,space),{moon:_m,...keep}=n.params;void _s;void _d;void _e;void _m;
+    return {...n,params:{...keep,...look}};
+  });
+  const color=(k:'zenith'|'horizon'|'glowColor'|'cloudColor',label:string)=><ColorField key={k} label={label} value={p[k]} space={space} range={R(t,k)} kelvinRange={R(t,`${k}.kelvin`)} onChange={v=>set(k,v)}/>;
+  const setMoon=(patch:Partial<SkyMoon>)=>moon&&set('moon',{...moon,...patch});
+  return <>
+    <Section title="Himmel">
+      {linearHint(graph)}
+      <SelectField label="Vorlage" value={p.preset} options={SKY_OPTS} onChange={choose}/>
+      <Hint>{SKY_PRESET_LABELS[p.preset]?.description} Die Vorlage setzt alle Werte unten; danach ist jeder einzeln änderbar.</Hint>
+      <SelectField label="Quelle" value={p.source} options={options(['procedural','image'] as const,{procedural:'Prozedural',image:'Bild (PNG im Archiv)'})}
+        onChange={v=>merge(v==='image'&&!p.file?{source:v,file:'skies/himmel.png'}:{source:v})}/>
+      {p.source==='image'&&<>
+        <TextField label="Datei im Archiv" value={p.file??''} maxLength={120} validate={v=>SKY_FILE.test(v)?undefined:'Erwartet wird skies/<name>.png (Kleinbuchstaben, Ziffern, . _ -).'} onChange={v=>set('file',v)}/>
+        <ArchiveFile kind="sky" path={p.file??''} files={files} setFile={setFile} onPath={v=>set('file',v)}/>
+        <Hint>Nur PNG (sRGB), eingepasst mit „Füllen“; JPEG wird nicht gelesen, weil es dafür keinen geprüften Decoder im Leser gibt.</Hint>
+      </>}
+    </Section>
+    <Section title="Verlauf und Licht">
+      {color('zenith','Farbe oben (Zenit)')}{color('horizon','Farbe am Horizont')}
+      <CheckField label="Horizont automatisch (unterste Himmelszeile)" checked={p.horizonY===undefined}
+        onChange={on=>on?dropParam(edit,'horizonY'):set('horizonY',.25)}/>
+      {anim(node,set,'horizonY','Horizonthöhe',{unit:'× Breite',slider:[0,1]})}
+      {anim(node,set,'gradientPower','Verlaufskurve',{slider:[.2,4]})}
+      {anim(node,set,'exposure','Belichtung',{unit:'EV',slider:[-6,4]})}
+      {anim(node,set,'glow','Horizontglühen',{slider:[0,3]})}{color('glowColor','Farbe des Glühens')}
+    </Section>
+    <Section title="Sterne, Wolken, Polarlicht">
+      {anim(node,set,'stars','Sterndichte')}{anim(node,set,'milkyWay','Milchstraße')}
+      {anim(node,set,'clouds','Bewölkung')}{anim(node,set,'cloudContrast','Wolkenkontrast')}{anim(node,set,'cloudScale','Wolkengröße',{unit:'× Breite',slider:[.05,1]})}{color('cloudColor','Wolkenfarbe')}
+      {anim(node,set,'aurora','Polarlicht',{slider:[0,2]})}
+    </Section>
+    <Section title="Mond">
+      <CheckField label="Mond zeigen" checked={!!moon} onChange={on=>on?set('moon',MOON_DEFAULT):dropParam(edit,'moon')}/>
+      {moon&&<>
+        <NumberField label="Position x" value={moon.x} range={R(t,'moon.x')} slider={[0,1]} onChange={v=>setMoon({x:v})}/>
+        <AnimField label="Höhe über Horizont" value={moon.height} range={R(t,'moon.height')} slider={[-.05,.5]} unit="× Breite" onChange={v=>setMoon({height:v})}/>
+        <AnimField label="Radius" value={moon.radius} range={R(t,'moon.radius')} slider={[.005,.08]} unit="× Breite" onChange={v=>setMoon({radius:v})}/>
+        <AnimField label="Helligkeit" value={moon.intensity} range={R(t,'moon.intensity')} slider={[-2,5]} unit="EV" onChange={v=>setMoon({intensity:v})}/>
+        <ColorField label="Mondfarbe" value={moon.color??{kelvin:4100}} space={space} range={R(t,'moon.color')} kelvinRange={R(t,'moon.color.kelvin')} onChange={v=>setMoon({color:v})}/>
+      </>}
+    </Section>
+    <Section title="Maske und Kante">
+      <Hint>Himmel = ungültige Tiefe oder Tiefe ab „Himmel ab Tiefe“. Werte über 1 nehmen nur die ungültige Tiefe.</Hint>
+      {anim(node,set,'skyDepth','Himmel ab Tiefe',{slider:[.5,2]})}
+      {anim(node,set,'edge','Kantenbreite',{unit:'× Breite',slider:[0,.02]})}
+      {anim(node,set,'spill','Himmelslicht auf der Szene')}
+      <Hint>Spiegelungen (z. B. im Wasser) werden nicht ersetzt, und das Licht der Szene ändert sich nicht von selbst: dafür Grade oder Relight nutzen.</Hint>
+    </Section>
+  </>;
+}
+
+const POINT_DEFAULT:PracticalPoint={x:.5,y:.28,radius:.01,intensity:3};
+function PracticalsForm({node,set,edit,graph}:FormProps<'light.practicals@1'>){
+  const t='light.practicals@1',p=node.params,space=graph.colorManagement.working.linear,points=p.points??[];
+  const setPoint=(i:number,patch:Partial<PracticalPoint>)=>set('points',points.map((x,j)=>j===i?{...x,...patch}:x));
+  return <>
+    <Section title="Erkennung">
+      {linearHint(graph)}
+      <Hint>Heuristisch: helle, kompakte Bereiche gelten als Lampen. Fenster, Himmel oder weiße Wände können fälschlich erkannt werden – dann Schwelle erhöhen oder eine Maske setzen.</Hint>
+      {anim(node,set,'threshold','Helligkeitsschwelle (linear)',{slider:[.05,2]})}
+      {anim(node,set,'softness','Weichheit der Schwelle',{unit:'EV',slider:[0,2]})}
+      {anim(node,set,'contrast','Mindestkontrast zur Umgebung',{unit:'EV',slider:[0,4]})}
+      {anim(node,set,'minSize','Mindestgröße',{unit:'× Breite',slider:[0,.02]})}
+      {anim(node,set,'maxSize','Höchstgröße',{unit:'× Breite',slider:[.005,.15]})}
+    </Section>
+    <Section title="Leuchten">
+      {anim(node,set,'intensity','Intensität',{unit:'EV',slider:[-2,5]})}
+      {anim(node,set,'glow','Glühen',{slider:[0,4]})}
+      {anim(node,set,'glowRadius','Glühradius',{unit:'× Breite',slider:[0,.05]})}
+      {anim(node,set,'throw','Reichweite ins Raumlicht',{unit:'× Breite',slider:[0,.4]})}
+      {anim(node,set,'falloff','Abfall',{slider:[0,3]})}
+    </Section>
+    <Section title="Lichtfarbe">
+      <ColorField label="Zielfarbe" value={p.color} space={space} range={R(t,'color')} kelvinRange={R(t,'color.kelvin')} onChange={v=>set('color',v)}/>
+      {anim(node,set,'recolor','Umfärben (0 = Originalfarbe)')}
+    </Section>
+    <Section title="Manuelle Lichtpunkte" actions={points.length<8?<button type="button" className="buck-icon-button" aria-label="Lichtpunkt hinzufügen" title="Lichtpunkt hinzufügen" onClick={()=>set('points',[...points,POINT_DEFAULT])}><Plus size={14}/></button>:undefined}>
+      {!points.length&&<Hint>Für Lampen, die die Erkennung nicht findet: bis zu 8 Punkte in Bildkoordinaten.</Hint>}
+      {points.map((pt,i)=><div key={i}>
+        <PointField label={`Punkt ${i+1}`} value={[pt.x,pt.y]} range={R(t,'points.x')} slider={[[0,1],[0,1]]} onChange={([x,y])=>setPoint(i,{x,y})}/>
+        <AnimField label="Radius" value={pt.radius} range={R(t,'points.radius')} slider={[.002,.05]} unit="× Breite" onChange={v=>setPoint(i,{radius:v})}/>
+        <AnimField label="Helligkeit" value={pt.intensity} range={R(t,'points.intensity')} slider={[-2,6]} unit="EV" onChange={v=>setPoint(i,{intensity:v})}/>
+        <ColorField label="Farbe" value={pt.color??p.color} space={space} range={R(t,'points.color')} kelvinRange={R(t,'points.color.kelvin')} onChange={v=>setPoint(i,{color:v})}/>
+        <button type="button" className="buck-icon-button" aria-label={`Punkt ${i+1} entfernen`} title="Entfernen" onClick={()=>{const next=points.filter((_,j)=>j!==i);if(next.length)set('points',next);else dropParam(edit,'points');}}><Trash2 size={14}/></button>
+      </div>)}
+    </Section>
+  </>;
+}
+
+function VignetteForm({node,set,edit,merge}:FormProps<'lens.vignette@1'>){
+  const p=node.params,ev=p.exposure!==undefined,num=(v:Animatable|undefined)=>typeof v==='number'?v:undefined;
+  // Switching unit keeps the corner gain: exposure = log2(1 − strength), strength = 1 − 2^exposure (animated values fall back to the default).
+  const unit=(v:'factor'|'ev')=>edit(n=>{
+    if(n.type!=='lens.vignette@1')return n;
+    const {strength,exposure,...rest}=n.params,s0=num(strength),e0=num(exposure);
+    const params=v==='ev'?{...rest,exposure:Number(Math.max(-8,Math.min(4,Math.log2(Math.max(2**-8,1-(s0??.4))))).toFixed(3))}
+      :{...rest,strength:Number(Math.max(-1,Math.min(1,1-2**(e0??-.8))).toFixed(3))};
+    return {...n,params};
+  });
+  return <Section title="Vignette">
+    <SelectField label="Angabe" value={ev?'ev':'factor'} options={options(['factor','ev'] as const,{factor:'Faktor (1 − Stärke)',ev:'Blendenstufen (EV)'})} onChange={unit}/>
+    {ev?anim(node,set,'exposure','Abfall am Rand',{unit:'EV',slider:[-4,1]}):anim(node,set,'strength','Stärke (negativ hellt auf)')}
+    {anim(node,set,'radius','Beginn ab Mitte',{unit:'× Breite',slider:[0,1]})}
+    {anim(node,set,'softness','Weiche des Abfalls',{unit:'× Breite',slider:[0,1]})}
+    {anim(node,set,'roundness','Rundheit (0 = Bildformat, 1 = Kreis)')}
+    <CheckField label="Mitte = Bildmitte" checked={p.center===undefined} onChange={on=>on?dropParam(edit,'center'):merge({center:[.5,.28125]})}/>
+    {p.center&&<PointField label="Mitte" value={p.center} range={R('lens.vignette@1','center')} slider={POINT_SLIDER} onChange={v=>set('center',v)}/>}
+    <Hint>Linear im Arbeitsraum: Der Abfall multipliziert das Licht wie ein Objektiv; Längen in Bildbreiten, damit Proxy und Vollbild gleich aussehen.</Hint>
   </Section>;
+}
+
+function GrainForm({node,set}:FormProps<'film.grain@1'>){
+  const t='film.grain@1',p=node.params;
+  return <Section title="Filmkorn">
+    {anim(node,set,'size','Korngröße',{unit:'× Breite',scale:'log',slider:[.0003,.005]})}
+    {anim(node,set,'intensity','Stärke',{unit:'EV',slider:[0,.6]})}
+    {anim(node,set,'response','Mitten und Schatten betonen')}
+    {anim(node,set,'chroma','Farbkorn (0 = monochrom)')}
+    <NumberField label="Muster (Seed)" value={p.seed} range={R(t,'seed')} slider={[0,999]} integer step={1} onChange={v=>set('seed',v)}/>
+    <CheckField label="Korn bewegt sich (je Frame neu)" checked={p.animate} onChange={v=>set('animate',v)}/>
+    <Hint>Deterministisch: gleiche Frame-Nummer, gleiches Korn. Das Raster hängt an der Bildbreite, im Proxy wird das Korn mitverkleinert.</Hint>
+  </Section>;
+}
+
+function HalationForm({node,set,edit,graph}:FormProps<'film.halation@1'>){
+  const t='film.halation@1',p=node.params;
+  return <>
+    <Section title="Halation">
+      {linearHint(graph)}
+      {anim(node,set,'threshold','Schwelle (lineare Luminanz)',{scale:'log',slider:[.1,8]})}
+      {anim(node,set,'knee','Übergang',{unit:'EV',slider:[0,4]})}
+      {anim(node,set,'radius','Radius',{unit:'× Breite',slider:[0,.03]})}
+      {anim(node,set,'intensity','Stärke',{slider:[0,2]})}
+      <ColorField label="Farbe des Lichthofs" value={p.color} space={graph.colorManagement.working.linear} range={R(t,'color')} kelvinRange={R(t,'color.kelvin')} onChange={v=>set('color',v)}/>
+    </Section>
+    <Section title="Bloom">
+      {anim(node,set,'bloom','Bloom-Anteil (neutral)',{slider:[0,1]})}
+      <CheckField label="Eigener Bloom-Radius" checked={p.bloomRadius!==undefined} onChange={on=>on?set('bloomRadius',typeof p.radius==='number'?p.radius*2:.012):dropParam(edit,'bloomRadius')}/>
+      {anim(node,set,'bloomRadius','Bloom-Radius',{unit:'× Breite',slider:[0,.05]})}
+      <Hint>Halation färbt den Hof um Spitzlichter rötlich (Rückreflexion im Filmträger); Bloom lässt helle Stellen in ihrer eigenen Farbe überstrahlen.</Hint>
+    </Section>
+  </>;
 }
 
 function DepthRangeForm({node,set,graph}:FormProps<'mask.depthRange@1'>){

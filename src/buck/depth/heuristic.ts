@@ -2,6 +2,7 @@ import { convertImage } from '../colorspace';
 import { clamp01, gaussianBlur, resample, scalarField } from '../field';
 import { BuckError } from '../types';
 import type { ImageBuf, ScalarField } from '../types';
+import { skyRegion } from '../reference/timeofday';
 /**
  * BEHELF, keine Tiefenmessung: a deterministic monocular guess for when no model or depth upload is available.
  * Cues: vertical position (top = far), haze via the dark channel prior (He, Sun, Tang, CVPR 2009: t = 1 - ω·dark,
@@ -63,5 +64,22 @@ export function heuristicDepth(image:ImageBuf):ScalarField {
   for(let i=0;i<n;i++)mix[i]=WEIGHTS.position*position[i]+WEIGHTS.haze*hz[i]+WEIGHTS.contrast*(1-ct[i])+WEIGHTS.saturation*(1-st[i]);
   const depth=stretch(gaussianBlur(mix,w,h,1,Math.max(1,.015*side))),out=resample(depth,w,h,1,W,H);
   for(let i=0;i<out.length;i++)out[i]=clamp01(out[i]);
+  markSky([r,g,b],depth,w,h,out,W,H);
   return scalarField(W,H,out);
+}
+/**
+ * Marks the sky as invalid depth (+Infinity), as a depth model does, so sky-dependent nodes (sky.replace) also work on
+ * the stand-in depth. Uses the image-based sky region of the reference analysis (grown from the top border over smooth,
+ * far pixels); no sky found leaves the depth unchanged.
+ */
+function markSky([r,g,b]:Float32Array[],depth:Float32Array,w:number,h:number,out:Float32Array,W:number,H:number){
+  if(w<8||h<8)return;
+  // The sky search expects linear light: decode the sRGB code values of the downscaled planes.
+  const lin=(v:number)=>v<=.04045?v/12.92:((v+.055)/1.055)**2.4,n=w*h,rgb=new Float32Array(n*3),Y=new Float32Array(n);
+  for(let i=0;i<n;i++){const R=lin(r[i]),G=lin(g[i]),B=lin(b[i]);rgb[i*3]=R;rgb[i*3+1]=G;rgb[i*3+2]=B;Y[i]=.2126*R+.7152*G+.0722*B;}
+  const sky=skyRegion({w,h,rgb,Y,depth:Float32Array.from(depth),depthKind:'heuristic'},true);
+  if(sky.kind!=='image')return;
+  const mask=new Float32Array(n);for(let i=0;i<n;i++)mask[i]=sky.mask[i];
+  const up=resample(mask,w,h,1,W,H);
+  for(let i=0;i<out.length;i++)if(up[i]>=.5)out[i]=Infinity;
 }

@@ -150,7 +150,7 @@ function extremeLine(line:Float32Array,r:number,dilate:boolean,g:Float32Array,hb
   for(let i=len-1;i>=0;i--)hb[i]=i===len-1||(i+1)%k===0?at(i):pick(hb[i+1],at(i));
   for(let j=0;j<n;j++)out[j]=pick(hb[j],g[j+2*r]);
 }
-function extremeFilter(data:Float32Array,w:number,h:number,r:number,dilate:boolean){
+export function extremeFilter(data:Float32Array,w:number,h:number,r:number,dilate:boolean){
   const tmp=new Float32Array(data.length),out=new Float32Array(data.length),m=Math.max(w,h),g=new Float32Array(m+2*r),hb=new Float32Array(m+2*r);
   const row=new Float32Array(w),rowOut=new Float32Array(w),col=new Float32Array(h),colOut=new Float32Array(h);
   for(let y=0;y<h;y++){row.set(data.subarray(y*w,(y+1)*w));extremeLine(row,r,dilate,g,hb,rowOut);tmp.set(rowOut,y*w);}

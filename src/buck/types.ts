@@ -34,7 +34,8 @@ export interface DofParams {
   focusDistance?:Animatable;fNumber?:Animatable;focalLength?:Animatable;sensorWidth?:Animatable;
   maxBlur:Animatable;blades:number;rotation:Animatable;bladeCurvature:Animatable;catEye:Animatable;highlightBoost:Animatable;
 }
-export interface RelightParams {azimuth:Animatable;elevation:Animatable;color:ColorValue;intensity:Animatable;softness:Animatable;mode:'add';preserveHighlights:Animatable;}
+/** `skinProtect` (optional, 0…1): soft color key (skinKey of src/color/look.ts) that neutralizes the light color and halves the gain on skin tones. Absent = 0. */
+export interface RelightParams {azimuth:Animatable;elevation:Animatable;color:ColorValue;intensity:Animatable;softness:Animatable;mode:'add';preserveHighlights:Animatable;skinProtect?:Animatable;}
 export interface DepthRangeParams {near:Animatable;far:Animatable;feather:Animatable;invert:boolean;}
 export interface GradientParams {shape:'linear'|'radial';start?:[number,number];end?:[number,number];center?:[number,number];radius?:Animatable;feather:Animatable;invert:boolean;}
 export interface LumaParams {low:Animatable;high:Animatable;softness:Animatable;space:SpaceName;}
@@ -42,12 +43,45 @@ export interface InputMaskParams {input:string;channel:'r'|'g'|'b'|'a'|'luma';}
 export interface ImageMaskParams {file:string;fit:'stretch'|'contain'|'cover';}
 export interface CombineParams {op:'multiply'|'max'|'min'|'subtract'|'screen';}
 export interface RefineParams {blur:Animatable;grow:Animatable;gamma:Animatable;}
+export const SKY_PRESETS=['night','starry-night','moonrise','twilight','blue-hour','golden-hour','overcast','clear-day','storm','sandstorm','aurora','neon-night'] as const;
+export type SkyPreset=typeof SKY_PRESETS[number];
+/** `height`: moon center above the horizon line in image widths (negative = below, hidden by the ground). */
+export interface SkyMoon {x:number;height:Animatable;radius:Animatable;intensity:Animatable;color?:ColorValue;}
+/** `preset` documents where the values came from and has no render effect; every value is explicit. Omitted horizonY = automatic. */
+export interface SkyParams {
+  source:'procedural'|'image';preset:SkyPreset;
+  zenith:ColorValue;horizon:ColorValue;horizonY?:Animatable;gradientPower:Animatable;exposure:Animatable;
+  glow:Animatable;glowColor:ColorValue;
+  stars:Animatable;milkyWay:Animatable;
+  clouds:Animatable;cloudContrast:Animatable;cloudScale:Animatable;cloudColor:ColorValue;
+  aurora:Animatable;moon?:SkyMoon;file?:string;
+  skyDepth:Animatable;edge:Animatable;spill:Animatable;
+}
+/** Manual light point in normalized coordinates (x 0…1, y 0…H/W). */
+export interface PracticalPoint {x:number;y:number;radius:Animatable;intensity:Animatable;color?:ColorValue;}
+export interface PracticalsParams {
+  threshold:Animatable;softness:Animatable;contrast:Animatable;minSize:Animatable;maxSize:Animatable;
+  intensity:Animatable;glow:Animatable;glowRadius:Animatable;throw:Animatable;falloff:Animatable;
+  color:ColorValue;recolor:Animatable;points?:PracticalPoint[];
+}
+
+/**
+ * lens.vignette@1 (spec §5.3.6): falloff toward the frame edge. Exactly one of `strength` (gain 1 − strength·f) or `exposure`
+ * (gain 2^(exposure·f), EV) is given. Lengths in image widths; `center` omitted = image center.
+ */
+export interface VignetteParams {strength?:Animatable;exposure?:Animatable;radius:Animatable;softness:Animatable;roundness:Animatable;center?:[number,number];}
+/** film.grain@1 (spec §5.3.7): deterministic grain on a lattice of `size` image widths, varied per frame unless `animate` is false. */
+export interface GrainParams {size:Animatable;intensity:Animatable;response:Animatable;chroma:Animatable;seed:number;animate:boolean;}
+/** film.halation@1 (spec §5.3.8): red halo around bright highlights plus an optional neutral bloom. */
+export interface HalationParams {threshold:Animatable;knee:Animatable;radius:Animatable;intensity:Animatable;color:ColorValue;bloom:Animatable;bloomRadius?:Animatable;}
 
 export interface NodeParamMap {
   'color.convert@1':ConvertParams;'color.look@1':LookParams;'color.cdl@1':CdlParams;'color.lut3d@1':Lut3dParams;
   'atmos.fog@1':FogParams;'lens.dof@1':DofParams;'light.relight@1':RelightParams;
   'mask.depthRange@1':DepthRangeParams;'mask.gradient@1':GradientParams;'mask.luma@1':LumaParams;'mask.input@1':InputMaskParams;
   'mask.image@1':ImageMaskParams;'mask.combine@1':CombineParams;'mask.refine@1':RefineParams;
+  'sky.replace@1':SkyParams;'light.practicals@1':PracticalsParams;
+  'lens.vignette@1':VignetteParams;'film.grain@1':GrainParams;'film.halation@1':HalationParams;
 }
 export type NodeType=keyof NodeParamMap;
 /** A reference is a node id or `$name` of a declared input; `$source` is the host image. */
@@ -78,6 +112,11 @@ export const PORTS:Record<NodeType,{inputs:PortSpec[];output:PortKind;space:'lin
   'mask.image@1':{inputs:[],output:'scalar',space:'any'},
   'mask.combine@1':{inputs:[{name:'a',kind:'scalar',optional:false},{name:'b',kind:'scalar',optional:false}],output:'scalar',space:'any'},
   'mask.refine@1':{inputs:[{name:'mask',kind:'scalar',optional:false}],output:'scalar',space:'any'},
+  'sky.replace@1':{inputs:[{name:'image',kind:'image',optional:false},{name:'depth',kind:'scalar',optional:false},{name:'mask',kind:'scalar',optional:true}],output:'image',space:'linear'},
+  'light.practicals@1':{inputs:[{name:'image',kind:'image',optional:false},{name:'depth',kind:'scalar',optional:true},{name:'normals',kind:'vector3',optional:true},{name:'mask',kind:'scalar',optional:true}],output:'image',space:'linear'},
+  'lens.vignette@1':{inputs:[{name:'image',kind:'image',optional:false},{name:'mask',kind:'scalar',optional:true}],output:'image',space:'linear'},
+  'film.grain@1':{inputs:[{name:'image',kind:'image',optional:false},{name:'mask',kind:'scalar',optional:true}],output:'image',space:'linear'},
+  'film.halation@1':{inputs:[{name:'image',kind:'image',optional:false},{name:'mask',kind:'scalar',optional:true}],output:'image',space:'linear'},
 };
 
 export type SourceDecl=

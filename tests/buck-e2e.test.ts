@@ -75,7 +75,8 @@ describe('.buck end to end',{timeout:60000},()=>{
 
   it('renders the read-back graph with heuristic depth: finite, fog cools and lifts the background, relight warms the left',async()=>{
     const {pkg,graph}=await roundTrip(),src=scene(),depth=heuristicDepth(src);
-    expect(allFinite(depth.data)).toBe(true);
+    // The stand-in depth marks a detected sky as +Infinity (invalid), like a depth model; everything else stays in 0…1.
+    expect(depth.data.every(v=>v===Infinity||(v>=0&&v<=1))).toBe(true);
     expect(rowMean(depth.data,0,6)).toBeGreaterThan(.75);expect(rowMean(depth.data,H-6,H)).toBeLessThan(.25);
 
     const aux:AuxChannels={depth,masks:{}},opts={frame:0,aux,files:pkg.files};

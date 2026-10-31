@@ -94,6 +94,36 @@ describe('lens.dof@1', () => {
     const b=edge(.3,1);
     for(let i=0;i<W2*H2;i++){if(i%W2<W2/2){expect(b.data[i*4]).toBe(1);expect(b.data[i*4+1]).toBe(0);}else expect(b.data[i*4]).toBe(0);}
   });
+  // Fix within lens.dof@1 (prototype draft 0.1): sparse foreground taps used to count a scatterer smaller than the tap
+  // spacing with the whole tap area, so one tap could stamp it opaquely (coverage ≥ 1) into the blurred background.
+  it('spreads a small mid-depth scatterer over its own disc instead of stamping it (energy kept, no dark dot)', () => {
+    const W2=200,H2=60,img=imageBuf(W2,H2,'ACEScg'),d=scalarField(W2,H2),p={...base,blurFar:.2,maxBlur:.2};
+    let dm=.35;while(cocWidth(dm,p)*W2/2<2)dm+=.001;
+    for(let i=0;i<W2*H2;i++){img.data.set([1,1,1,1],i*4);d.data[i]=1;}
+    const pts:[number,number][]=[[50,30],[90,25],[130,35],[160,28]];
+    for(const [x,y] of pts){img.data.set([0,0,0,1],(y*W2+x)*4);d.data[y*W2+x]=dm;}
+    const out=run(img,d,p);
+    for(const [px,py] of pts){
+      let dark=0,min=Infinity;
+      for(let y=py-8;y<=py+8;y++)for(let x=px-8;x<=px+8;x++){const v=out.data[(y*W2+x)*4];dark+=1-v;min=Math.min(min,v);}
+      // One black pixel spread over π·2² px: about 1/12.6 coverage each (the receiving pixel itself shows its own blur).
+      expect(dark).toBeGreaterThan(.85);expect(dark).toBeLessThan(1.15);
+      expect(min).toBeGreaterThan(.75);
+    }
+  });
+  it('no dark edge: a thin contour on the depth ramp of a sharp silhouette is not stamped into the blurred background', () => {
+    // Estimated depth puts the dark outline pixel of a subject at an intermediate depth (CoC ≈ 2 px) between the sharp
+    // subject (0.3) and the bright, strongly blurred background (1.0); the silhouette is jagged as in a real image.
+    const W2=200,H2=64,img=imageBuf(W2,H2,'ACEScg'),d=scalarField(W2,H2),p={...base,blurFar:.2,maxBlur:.2},edge=(y:number)=>100+((y*5)%7)-3;
+    let dm=.35;while(cocWidth(dm,p)*W2/2<2)dm+=.001;
+    for(let y=0;y<H2;y++)for(let x=0;x<W2;x++){const i=y*W2+x,e=edge(y),v=x<e?.3:x===e?.02:1;img.data.set([v,v,v,1],i*4);d.data[i]=x<e?.3:x===e?dm:1;}
+    const out=run(img,d,p);
+    for(let y=0;y<H2;y++){
+      for(let x=0;x<edge(y);x++)expect(out.data[(y*W2+x)*4]).toBe(img.data[(y*W2+x)*4]);
+      // Beyond the contour the background is never darker than the softly spread contour (before the fix: 0.02 dots).
+      for(let x=edge(y)+1;x<W2;x++)expect(out.data[(y*W2+x)*4]).toBeGreaterThan(.6);
+    }
+  });
   it('preserves a constant image (energy) for every bokeh option', () => {
     const img=imageBuf(W,H,'ACEScg');for(let i=0;i<W*H;i++)img.data.set([.42,.17,2.5,1],i*4);
     const depth=depthOf(W,H,(x,y)=>(x*13+y*7)%10/9);

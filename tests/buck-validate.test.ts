@@ -149,7 +149,7 @@ const INVALID:[string,(g:BuckGraph&Obj)=>void,RegExp][]=[
   ['uppercase weights hash',g=>{g.models['vda-small-rel@1'].weightsSha256=SHA.toUpperCase();},/kein gültiger SHA-256/],
   ['ModelPin unknown field',g=>{(g.models['vda-small-rel@1'] as unknown as Obj).weightsUrl='https://x';},/unbekanntes Feld „weightsUrl“/],
   ['longSide not multiple',g=>{g.models['vda-small-rel@1'].preprocess.longSide=520;},/Vielfaches von „multipleOf“/],
-  ['unknown required node type',g=>{g.nodes.push({id:'grain',type:'film.grain@1',inputs:{image:'fargo'},params:{}} as never);},/Unbekannter Knotentyp „film\.grain@1“/],
+  ['unknown required node type',g=>{g.nodes.push({id:'grain',type:'film.scratches@1',inputs:{image:'fargo'},params:{}} as never);},/Unbekannter Knotentyp „film\.scratches@1“/],
   ['invalid type name',g=>{g.nodes.push({id:'x',type:'Grain!',optional:true,inputs:{},params:{}} as never);},/kein gültiger Knotentypname/],
   ['estimate with undeclared model',g=>{(g.inputs.depth.sources[2] as Obj).model='depth-pro@1';},/nicht deklarierte Modell „depth-pro@1“/],
   ['derive from a non-depth input',g=>{(g.inputs.normals.sources[2] as Obj).from='normals';},/deklarierte Tiefen-Eingabe/],
@@ -219,7 +219,7 @@ describe('JSON schema docs/schema/buck-1.0.schema.json',()=>{
     ['unknown param field',(g:BuckGraph&Obj)=>{params(g,'fog').haze=.2;}],
     ['param out of range',(g:BuckGraph&Obj)=>{params(g,'fog').density=25;}],
     ['keyframe value out of range',(g:BuckGraph&Obj)=>{params(g,'fog').maxOpacity={keys:[[0,1.5]],interp:'hold'};}],
-    ['unknown required node type',(g:BuckGraph&Obj)=>{g.nodes.push({id:'grain',type:'film.grain@1',inputs:{image:'fargo'},params:{}} as never);}],
+    ['unknown required node type',(g:BuckGraph&Obj)=>{g.nodes.push({id:'grain',type:'film.scratches@1',inputs:{image:'fargo'},params:{}} as never);}],
     ['missing required port',(g:BuckGraph&Obj)=>{delete node(g,'fog').inputs.depth;}],
     ['broken weights hash',(g:BuckGraph&Obj)=>{g.models['vda-small-rel@1'].weightsSha256='1234abcd';}],
     ['path traversal',(g:BuckGraph&Obj)=>{params(g,'fargo').bakedLut='luts/../x.cube';}],
@@ -230,6 +230,8 @@ describe('JSON schema docs/schema/buck-1.0.schema.json',()=>{
     const resolve=(s:unknown):Obj=>{let x=s as Obj;while(typeof x.$ref==='string')x=deref(x.$ref) as Obj;return x;};
     const child=(s:Obj,seg:string):Obj|undefined=>{
       const r=resolve(s);if(isObj(r.properties)&&seg in r.properties)return r.properties[seg] as Obj;
+      // Lists of objects (light.practicals@1 points): ranges are named after the item field, e.g. points.x.
+      if(isObj(r.items)){const c=child(r.items as Obj,seg);if(c)return c;}
       for(const k of ['anyOf','allOf','oneOf'])for(const b of (r[k]??[]) as Obj[]){const c=child(b,seg);if(c)return c;}
     };
     // Bounds reachable without crossing into named properties (keyframe frames carry none).
@@ -247,5 +249,42 @@ describe('JSON schema docs/schema/buck-1.0.schema.json',()=>{
       expect([[...lo],[...hi]],`${type} ${path}`).toEqual([[min],[max]]);checked++;
     }
     expect(checked).toBeGreaterThan(50);
+  });
+});
+
+describe('optics nodes and relight skinProtect (§5.3.3, §5.3.6–§5.3.8)',()=>{
+  // Vignette, halation and grain between the fog and the display conversion, all in ACEScg; relight with skin protection.
+  const optics=(edit:(n:Record<string,Obj>)=>void=()=>{})=>mutate(g=>{
+    const nodes:Record<string,Obj>={
+      vignette:{id:'vignette',type:'lens.vignette@1',inputs:{image:'fog'},params:{exposure:-1,radius:.3,softness:.45,roundness:.3}},
+      halation:{id:'halation',type:'film.halation@1',inputs:{image:'vignette',mask:'bgMask'},params:{threshold:.8,knee:1.5,radius:.006,intensity:.6,color:{kelvin:2000},bloom:.2,bloomRadius:.012}},
+      grain:{id:'grain',type:'film.grain@1',inputs:{image:'halation'},params:{size:.0007,intensity:{keys:[[0,.1],[24,.2]],interp:'linear'},response:.8,chroma:.3,seed:12,animate:true}},
+    };
+    edit(nodes);
+    g.nodes.splice(5,0,...Object.values(nodes) as never[]);node(g,'toDisplay').inputs.image='grain';params(g,'warmKey').skinProtect=.8;
+  });
+  it('accepts them through checkGraph and the JSON schema',()=>{
+    const g=optics();expect(checkGraph(g)).toEqual([]);expect(schemaValid(g)).toBe(true);
+    const s=optics(n=>{delete (n.vignette.params as Obj).exposure;(n.vignette.params as Obj).strength=-.3;(n.vignette.params as Obj).center=[.5,.3];});
+    expect(checkGraph(s)).toEqual([]);expect(schemaValid(s)).toBe(true);
+  });
+  it.each([
+    ['vignette with strength and exposure',(n:Record<string,Obj>)=>{(n.vignette.params as Obj).strength=.3;},/Genau einer/],
+    ['vignette without falloff amount',(n:Record<string,Obj>)=>{delete (n.vignette.params as Obj).exposure;},/Genau einer/],
+    ['grain size below the lattice limit',(n:Record<string,Obj>)=>{(n.grain.params as Obj).size=.0001;},/„size“ muss zwischen 0,0002 und 0,01/],
+    ['grain seed not an integer',(n:Record<string,Obj>)=>{(n.grain.params as Obj).seed=1.5;},/„seed“ muss eine ganze Zahl/],
+    ['grain without animate',(n:Record<string,Obj>)=>{delete (n.grain.params as Obj).animate;},/Pflichtfeld „animate“/],
+    ['halation radius too large',(n:Record<string,Obj>)=>{(n.halation.params as Obj).radius=.2;},/„radius“ muss zwischen 0 und 0,1/],
+    ['optics on a depth port',(n:Record<string,Obj>)=>{(n.grain.inputs as Obj).depth='$depth';},/hat keinen Eingang „depth“/],
+  ])('rejects %s (reader and schema)',(_,edit,re)=>{
+    const g=optics(edit);expect(checkGraph(g).join('\n')).toMatch(re);expect(schemaValid(g)).toBe(false);
+  });
+  it('rejects optics in a display space (they work linear)',()=>{
+    const g=mutate(g=>{g.nodes.push({id:'grain',type:'film.grain@1',inputs:{image:'fargo'},params:{size:.0007,intensity:.15,response:.8,chroma:.3,seed:0,animate:true}} as never);g.output='grain';});
+    expect(checkGraph(g).join()).toMatch(/linearen Arbeitsraum/);
+  });
+  it('rejects relight skinProtect outside 0…1 in both',()=>{
+    const g=mutate(g=>{params(g,'warmKey').skinProtect=1.2;});
+    expect(checkGraph(g).join()).toMatch(/„skinProtect“ muss zwischen 0 und 1/);expect(schemaValid(g)).toBe(false);
   });
 });

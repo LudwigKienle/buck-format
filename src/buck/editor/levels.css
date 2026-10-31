@@ -1,0 +1,20 @@
+/* Level groups and time-of-day switch of the node stack (NodeStack.tsx); app tokens --accent, --border, --muted from the site CSS. */
+.buck-tod{display:grid;gap:6px;margin:0 0 12px}
+.buck-tod-title{font-weight:600;font-size:12px;color:#dce1e6}
+.buck-tod-options{display:flex;flex-wrap:wrap;gap:4px}
+.buck-tod-option{font:inherit;font-size:11px;line-height:1.4;padding:3px 9px;border-radius:12px;border:1px solid #343b42;background:#1b1f23;color:#d3d9de;cursor:pointer}
+.buck-tod-option:hover{border-color:#5a6470}
+.buck-tod-option:focus-visible{outline:1px solid var(--accent);outline-offset:2px}
+.buck-tod-active{background:var(--accent);border-color:#d8f07e;color:#11170a;font-weight:600}
+.buck-tod small{font-size:10px;line-height:1.5}
+.buck-level{border-left:2px solid var(--buck-level-color,#343b42);padding:2px 0 4px 9px;margin:8px 0}
+.buck-level-light{--buck-level-color:#c9a04a}
+.buck-level-atmosphere{--buck-level-color:#5f9fc4}
+.buck-level-optics{--buck-level-color:#9a82cf}
+.buck-level-grade{--buck-level-color:#8fb35a}
+.buck-level-title{margin:0;font-size:12px;display:flex;align-items:center;gap:8px;color:#dce1e6}
+.buck-level-desc{margin:0 0 4px;font-size:10px;line-height:1.45}
+.buck-level-empty{margin:0;font-size:10px;font-style:italic}
+.buck-level-off{border-left-style:dashed}
+.buck-level-warn{font-weight:400;font-size:10px;color:#f0d29a;border:1px solid #6a5530;background:#2a2418;border-radius:10px;padding:0 7px}
+.buck-level-note{font-size:10px;line-height:1.5}

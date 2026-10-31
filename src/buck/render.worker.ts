@@ -10,8 +10,14 @@ import type { AuxChannels, Buf, BuckGraph, ImageBuf, ScalarField, SpaceName, Vec
 export interface RenderJob {
   jobId:number;graph:BuckGraph;source:{width:number;height:number;data:Float32Array;space:SpaceName};
   aux:AuxChannels;files:[string,Uint8Array][];frame:number;target?:string;channel?:'depth'|'normals';
+  /**
+   * Resolution of `source` relative to the editor image (spec §10 preview): 0.5 for the reduced interactive preview, whose
+   * source the editor has already downscaled. Spatial parameters are in image widths (§4.4), so only the size changes;
+   * aux channels are bound to the source size by prepareAux. Echoed in the reply.
+   */
+  scale?:number;
 }
-export interface RenderDone {jobId:number;width:number;height:number;preview:Uint8ClampedArray;warnings:string[];bypassed:string[];ms:number;}
+export interface RenderDone {jobId:number;width:number;height:number;preview:Uint8ClampedArray;warnings:string[];bypassed:string[];ms:number;scale?:number;}
 export interface RenderFailed {jobId:number;error:string;}
 export type RenderReply=RenderDone|RenderFailed;
 
@@ -49,7 +55,9 @@ export function handleJob(job:RenderJob,render:Render=renderGraph,now:()=>number
       output=r.output;warnings=note?[note,...r.warnings]:r.warnings;bypassed=r.bypassed;
     }
     const preview=previewOf(output);
-    return {reply:{jobId:job.jobId,width:output.width,height:output.height,preview,warnings,bypassed,ms:Math.max(0,now()-t0)},transfer:[preview.buffer as ArrayBuffer]};
+    const reply:RenderDone={jobId:job.jobId,width:output.width,height:output.height,preview,warnings,bypassed,ms:Math.max(0,now()-t0)};
+    if(job.scale!==undefined&&job.scale!==1)reply.scale=job.scale;
+    return {reply,transfer:[preview.buffer as ArrayBuffer]};
   }catch(e){
     const msg=e instanceof Error?e.message:String(e);
     return {reply:{jobId:job.jobId,error:e instanceof BuckError?msg:`Interner Renderfehler: ${msg}`},transfer:[]};

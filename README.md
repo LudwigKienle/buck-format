@@ -7,10 +7,15 @@ A `.cube` LUT maps one color to another. It has no idea *where* a pixel is, so i
 | Node | What it does |
 |---|---|
 | `color.look`, `color.cdl`, `color.lut3d`, `color.convert` | Color grade, ASC CDL, embedded 3D LUT, explicit color-space conversion |
+| `light.relight` | Light from a direction, color (Kelvin) and softness, via surface normals, optional skin protection |
+| `light.practicals` | Existing lamps light up (glow and light on their surroundings) or change color; manual light points |
+| `sky.replace` | New sky from the depth mask: night, starry sky, moonrise, blue/golden hour, overcast, storm, sandstorm, aurora, neon night … or an embedded PNG |
 | `atmos.fog` | Depth-based haze and atmosphere |
 | `lens.dof` | Depth of field with focus, aperture and polygonal bokeh |
-| `light.relight` | Light from a direction, color (Kelvin) and softness, via surface normals |
+| `lens.vignette`, `film.grain`, `film.halation` | Vignette, deterministic film grain, halation and bloom |
 | `mask.*` | Depth range, gradient, luma, image and combined masks |
+
+The editor orders nodes in four levels (light → atmosphere → optics → grade), has a time-of-day switch ("Nacht" also replaces the sky and darkens the scene), understands looks in German or English (*"Dune-Look bei Nacht, Lampen leuchten warm, Filmkorn"*), and can derive a whole graph from **just a reference image**: color, light color, time of day and sky, haze, depth of field, light direction and lamps, each as a suggestion with a confidence level ([docs/REFERENCE_ANALYSIS.md](docs/REFERENCE_ANALYSIS.md)).
 
 Depth comes from the host, or is estimated locally by a model pinned by its SHA-256 hash. Every `.buck` can also carry a plain `.cube` with the color part, so pipelines that have never heard of it keep working.
 
@@ -33,7 +38,7 @@ Then open the printed URL. `npm test` runs the test suite, `npm run build` creat
 
 ### Real depth estimation (optional)
 
-Without a model, the editor uses a clearly labeled image heuristic as a stand-in for depth. For real depth, download **Depth Anything V2 Small** (ONNX, Apache-2.0, about 99 MB) yourself and pick the file in the editor under *Hilfskanäle → Tiefe schätzen*:
+Without a model, the editor uses a clearly labeled image heuristic as a stand-in for depth (it also detects the sky, so sky replacement works, with rougher edges). For real depth, download **Depth Anything V2 Small** (ONNX, Apache-2.0, about 99 MB) yourself and pick the file in the editor under *Hilfskanäle → Tiefe schätzen*:
 
 - File: [`onnx/model.onnx`](https://huggingface.co/onnx-community/depth-anything-v2-small/blob/f7421df0cc30f121782ab050d42f0a423291dcde/onnx/model.onnx) from `onnx-community/depth-anything-v2-small`, revision `f7421df0cc30f121782ab050d42f0a423291dcde`
 - SHA-256: `afb6a5c28f3b6bf1618c6e43f02073ef9dfdc70e937502d51603e57b0a1df10c`
@@ -54,7 +59,7 @@ A `.buck` file is a ZIP with `mimetype`, `manifest.json` (SHA-256 per entry), `g
 - `src/color/`: the look engine shared with Buckswood Auto LUT
 - `tests/`: Vitest suite, including adversarial container and PNG tests
 
-Known limits: rendering runs on the CPU in a worker (several seconds per preview), there is no WebGPU render path yet, and saving bakes the fallback LUTs on the main thread.
+Known limits: rendering runs on the CPU in a worker (about 2 s per 1100 px preview, a half-resolution draft while you drag), there is no WebGPU render path yet; sky edges, lamp detection and the reference analysis are heuristic and meant as suggestions.
 
 ## Credits and license
 

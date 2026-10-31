@@ -1352,6 +1352,191 @@
           "if": {
             "properties": {
               "type": {
+                "const": "sky.replace@1"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "properties": {
+              "params": {
+                "$ref": "#/$defs/params:sky.replace@1"
+              },
+              "inputs": {
+                "type": "object",
+                "properties": {
+                  "image": {
+                    "$ref": "#/$defs/ref"
+                  },
+                  "depth": {
+                    "$ref": "#/$defs/ref"
+                  },
+                  "mask": {
+                    "$ref": "#/$defs/ref"
+                  }
+                },
+                "required": [
+                  "image",
+                  "depth"
+                ],
+                "patternProperties": {},
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "light.practicals@1"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "properties": {
+              "params": {
+                "$ref": "#/$defs/params:light.practicals@1"
+              },
+              "inputs": {
+                "type": "object",
+                "properties": {
+                  "image": {
+                    "$ref": "#/$defs/ref"
+                  },
+                  "depth": {
+                    "$ref": "#/$defs/ref"
+                  },
+                  "normals": {
+                    "$ref": "#/$defs/ref"
+                  },
+                  "mask": {
+                    "$ref": "#/$defs/ref"
+                  }
+                },
+                "required": [
+                  "image"
+                ],
+                "patternProperties": {},
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "lens.vignette@1"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "properties": {
+              "params": {
+                "$ref": "#/$defs/params:lens.vignette@1"
+              },
+              "inputs": {
+                "type": "object",
+                "properties": {
+                  "image": {
+                    "$ref": "#/$defs/ref"
+                  },
+                  "mask": {
+                    "$ref": "#/$defs/ref"
+                  }
+                },
+                "required": [
+                  "image"
+                ],
+                "patternProperties": {},
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "film.grain@1"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "properties": {
+              "params": {
+                "$ref": "#/$defs/params:film.grain@1"
+              },
+              "inputs": {
+                "type": "object",
+                "properties": {
+                  "image": {
+                    "$ref": "#/$defs/ref"
+                  },
+                  "mask": {
+                    "$ref": "#/$defs/ref"
+                  }
+                },
+                "required": [
+                  "image"
+                ],
+                "patternProperties": {},
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "film.halation@1"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "properties": {
+              "params": {
+                "$ref": "#/$defs/params:film.halation@1"
+              },
+              "inputs": {
+                "type": "object",
+                "properties": {
+                  "image": {
+                    "$ref": "#/$defs/ref"
+                  },
+                  "mask": {
+                    "$ref": "#/$defs/ref"
+                  }
+                },
+                "required": [
+                  "image"
+                ],
+                "patternProperties": {},
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
                 "not": {
                   "enum": [
                     "color.convert@1",
@@ -1367,7 +1552,12 @@
                     "mask.input@1",
                     "mask.image@1",
                     "mask.combine@1",
-                    "mask.refine@1"
+                    "mask.refine@1",
+                    "sky.replace@1",
+                    "light.practicals@1",
+                    "lens.vignette@1",
+                    "film.grain@1",
+                    "film.halation@1"
                   ]
                 }
               }
@@ -2672,6 +2862,38 @@
           "enum": [
             "add"
           ]
+        },
+        "skinProtect": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/keyframes"
+                },
+                {
+                  "properties": {
+                    "keys": {
+                      "items": {
+                        "prefixItems": [
+                          true,
+                          {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
         }
       },
       "required": [
@@ -3270,6 +3492,1992 @@
         "blur",
         "grow",
         "gamma"
+      ],
+      "patternProperties": {
+        "^x-[A-Za-z0-9]": true
+      },
+      "additionalProperties": false
+    },
+    "params:sky.replace@1": {
+      "type": "object",
+      "properties": {
+        "source": {
+          "enum": [
+            "procedural",
+            "image"
+          ]
+        },
+        "preset": {
+          "enum": [
+            "night",
+            "starry-night",
+            "moonrise",
+            "twilight",
+            "blue-hour",
+            "golden-hour",
+            "overcast",
+            "clear-day",
+            "storm",
+            "sandstorm",
+            "aurora",
+            "neon-night"
+          ]
+        },
+        "zenith": {
+          "anyOf": [
+            {
+              "type": "array",
+              "prefixItems": [
+                {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 16
+                },
+                {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 16
+                },
+                {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 16
+                }
+              ],
+              "items": false,
+              "minItems": 3
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kelvin": {
+                  "type": "number",
+                  "minimum": 1667,
+                  "maximum": 25000
+                }
+              },
+              "required": [
+                "kelvin"
+              ],
+              "patternProperties": {
+                "^x-[A-Za-z0-9]": true
+              },
+              "additionalProperties": false
+            }
+          ]
+        },
+        "horizon": {
+          "anyOf": [
+            {
+              "type": "array",
+              "prefixItems": [
+                {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 16
+                },
+                {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 16
+                },
+                {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 16
+                }
+              ],
+              "items": false,
+              "minItems": 3
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kelvin": {
+                  "type": "number",
+                  "minimum": 1667,
+                  "maximum": 25000
+                }
+              },
+              "required": [
+                "kelvin"
+              ],
+              "patternProperties": {
+                "^x-[A-Za-z0-9]": true
+              },
+              "additionalProperties": false
+            }
+          ]
+        },
+        "horizonY": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": -1,
+              "maximum": 2
+            },
+            {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/keyframes"
+                },
+                {
+                  "properties": {
+                    "keys": {
+                      "items": {
+                        "prefixItems": [
+                          true,
+                          {
+                            "type": "number",
+                            "minimum": -1,
+                            "maximum": 2
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "gradientPower": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0.05,
+              "maximum": 10
+            },
+            {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/keyframes"
+                },
+                {
+                  "properties": {
+                    "keys": {
+                      "items": {
+                        "prefixItems": [
+                          true,
+                          {
+                            "type": "number",
+                            "minimum": 0.05,
+                            "maximum": 10
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "exposure": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": -10,
+              "maximum": 10
+            },
+            {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/keyframes"
+                },
+                {
+                  "properties": {
+                    "keys": {
+                      "items": {
+                        "prefixItems": [
+                          true,
+                          {
+                            "type": "number",
+                            "minimum": -10,
+                            "maximum": 10
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "glow": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 8
+            },
+            {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/keyframes"
+                },
+                {
+                  "properties": {
+                    "keys": {
+                      "items": {
+                        "prefixItems": [
+                          true,
+                          {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 8
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "glowColor": {
+          "anyOf": [
+            {
+              "type": "array",
+              "prefixItems": [
+                {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 16
+                },
+                {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 16
+                },
+                {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 16
+                }
+              ],
+              "items": false,
+              "minItems": 3
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kelvin": {
+                  "type": "number",
+                  "minimum": 1667,
+                  "maximum": 25000
+                }
+              },
+              "required": [
+                "kelvin"
+              ],
+              "patternProperties": {
+                "^x-[A-Za-z0-9]": true
+              },
+              "additionalProperties": false
+            }
+          ]
+        },
+        "stars": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/keyframes"
+                },
+                {
+                  "properties": {
+                    "keys": {
+                      "items": {
+                        "prefixItems": [
+                          true,
+                          {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "milkyWay": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/keyframes"
+                },
+                {
+                  "properties": {
+                    "keys": {
+                      "items": {
+                        "prefixItems": [
+                          true,
+                          {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "clouds": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/keyframes"
+                },
+                {
+                  "properties": {
+                    "keys": {
+                      "items": {
+                        "prefixItems": [
+                          true,
+                          {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "cloudContrast": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/keyframes"
+                },
+                {
+                  "properties": {
+                    "keys": {
+                      "items": {
+                        "prefixItems": [
+                          true,
+                          {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "cloudScale": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0.01,
+              "maximum": 4
+            },
+            {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/keyframes"
+                },
+                {
+                  "properties": {
+                    "keys": {
+                      "items": {
+                        "prefixItems": [
+                          true,
+                          {
+                            "type": "number",
+                            "minimum": 0.01,
+                            "maximum": 4
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "cloudColor": {
+          "anyOf": [
+            {
+              "type": "array",
+              "prefixItems": [
+                {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 16
+                },
+                {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 16
+                },
+                {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 16
+                }
+              ],
+              "items": false,
+              "minItems": 3
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kelvin": {
+                  "type": "number",
+                  "minimum": 1667,
+                  "maximum": 25000
+                }
+              },
+              "required": [
+                "kelvin"
+              ],
+              "patternProperties": {
+                "^x-[A-Za-z0-9]": true
+              },
+              "additionalProperties": false
+            }
+          ]
+        },
+        "aurora": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 4
+            },
+            {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/keyframes"
+                },
+                {
+                  "properties": {
+                    "keys": {
+                      "items": {
+                        "prefixItems": [
+                          true,
+                          {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 4
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "moon": {
+          "type": "object",
+          "properties": {
+            "x": {
+              "type": "number",
+              "minimum": -1,
+              "maximum": 2
+            },
+            "height": {
+              "anyOf": [
+                {
+                  "type": "number",
+                  "minimum": -1,
+                  "maximum": 2
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/keyframes"
+                    },
+                    {
+                      "properties": {
+                        "keys": {
+                          "items": {
+                            "prefixItems": [
+                              true,
+                              {
+                                "type": "number",
+                                "minimum": -1,
+                                "maximum": 2
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            "radius": {
+              "anyOf": [
+                {
+                  "type": "number",
+                  "minimum": 0.001,
+                  "maximum": 0.2
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/keyframes"
+                    },
+                    {
+                      "properties": {
+                        "keys": {
+                          "items": {
+                            "prefixItems": [
+                              true,
+                              {
+                                "type": "number",
+                                "minimum": 0.001,
+                                "maximum": 0.2
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            "intensity": {
+              "anyOf": [
+                {
+                  "type": "number",
+                  "minimum": -10,
+                  "maximum": 10
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/keyframes"
+                    },
+                    {
+                      "properties": {
+                        "keys": {
+                          "items": {
+                            "prefixItems": [
+                              true,
+                              {
+                                "type": "number",
+                                "minimum": -10,
+                                "maximum": 10
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            "color": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "prefixItems": [
+                    {
+                      "type": "number",
+                      "minimum": 0,
+                      "maximum": 16
+                    },
+                    {
+                      "type": "number",
+                      "minimum": 0,
+                      "maximum": 16
+                    },
+                    {
+                      "type": "number",
+                      "minimum": 0,
+                      "maximum": 16
+                    }
+                  ],
+                  "items": false,
+                  "minItems": 3
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "kelvin": {
+                      "type": "number",
+                      "minimum": 1667,
+                      "maximum": 25000
+                    }
+                  },
+                  "required": [
+                    "kelvin"
+                  ],
+                  "patternProperties": {
+                    "^x-[A-Za-z0-9]": true
+                  },
+                  "additionalProperties": false
+                }
+              ]
+            }
+          },
+          "required": [
+            "x",
+            "height",
+            "radius",
+            "intensity"
+          ],
+          "patternProperties": {
+            "^x-[A-Za-z0-9]": true
+          },
+          "additionalProperties": false
+        },
+        "file": {
+          "type": "string",
+          "pattern": "^skies/[a-z0-9_-][a-z0-9._-]{0,99}\\.png$",
+          "not": {
+            "pattern": "\\.\\."
+          }
+        },
+        "skyDepth": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 10000
+            },
+            {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/keyframes"
+                },
+                {
+                  "properties": {
+                    "keys": {
+                      "items": {
+                        "prefixItems": [
+                          true,
+                          {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 10000
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "edge": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 0.05
+            },
+            {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/keyframes"
+                },
+                {
+                  "properties": {
+                    "keys": {
+                      "items": {
+                        "prefixItems": [
+                          true,
+                          {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 0.05
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "spill": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/keyframes"
+                },
+                {
+                  "properties": {
+                    "keys": {
+                      "items": {
+                        "prefixItems": [
+                          true,
+                          {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "required": [
+        "source",
+        "preset",
+        "zenith",
+        "horizon",
+        "gradientPower",
+        "exposure",
+        "glow",
+        "glowColor",
+        "stars",
+        "milkyWay",
+        "clouds",
+        "cloudContrast",
+        "cloudScale",
+        "cloudColor",
+        "aurora",
+        "skyDepth",
+        "edge",
+        "spill"
+      ],
+      "patternProperties": {
+        "^x-[A-Za-z0-9]": true
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "source": {
+                "const": "image"
+              }
+            },
+            "required": [
+              "source"
+            ]
+          },
+          "then": {
+            "required": [
+              "file"
+            ]
+          }
+        }
+      ]
+    },
+    "params:light.practicals@1": {
+      "type": "object",
+      "properties": {
+        "threshold": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0.001,
+              "maximum": 16
+            },
+            {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/keyframes"
+                },
+                {
+                  "properties": {
+                    "keys": {
+                      "items": {
+                        "prefixItems": [
+                          true,
+                          {
+                            "type": "number",
+                            "minimum": 0.001,
+                            "maximum": 16
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "softness": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 4
+            },
+            {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/keyframes"
+                },
+                {
+                  "properties": {
+                    "keys": {
+                      "items": {
+                        "prefixItems": [
+                          true,
+                          {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 4
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "contrast": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 6
+            },
+            {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/keyframes"
+                },
+                {
+                  "properties": {
+                    "keys": {
+                      "items": {
+                        "prefixItems": [
+                          true,
+                          {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 6
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "minSize": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 0.05
+            },
+            {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/keyframes"
+                },
+                {
+                  "properties": {
+                    "keys": {
+                      "items": {
+                        "prefixItems": [
+                          true,
+                          {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 0.05
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "maxSize": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 0.25
+            },
+            {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/keyframes"
+                },
+                {
+                  "properties": {
+                    "keys": {
+                      "items": {
+                        "prefixItems": [
+                          true,
+                          {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 0.25
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "intensity": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": -10,
+              "maximum": 10
+            },
+            {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/keyframes"
+                },
+                {
+                  "properties": {
+                    "keys": {
+                      "items": {
+                        "prefixItems": [
+                          true,
+                          {
+                            "type": "number",
+                            "minimum": -10,
+                            "maximum": 10
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "glow": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 8
+            },
+            {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/keyframes"
+                },
+                {
+                  "properties": {
+                    "keys": {
+                      "items": {
+                        "prefixItems": [
+                          true,
+                          {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 8
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "glowRadius": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 0.1
+            },
+            {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/keyframes"
+                },
+                {
+                  "properties": {
+                    "keys": {
+                      "items": {
+                        "prefixItems": [
+                          true,
+                          {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 0.1
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "throw": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 0.5
+            },
+            {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/keyframes"
+                },
+                {
+                  "properties": {
+                    "keys": {
+                      "items": {
+                        "prefixItems": [
+                          true,
+                          {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 0.5
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "falloff": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 3
+            },
+            {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/keyframes"
+                },
+                {
+                  "properties": {
+                    "keys": {
+                      "items": {
+                        "prefixItems": [
+                          true,
+                          {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 3
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "color": {
+          "anyOf": [
+            {
+              "type": "array",
+              "prefixItems": [
+                {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 16
+                },
+                {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 16
+                },
+                {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 16
+                }
+              ],
+              "items": false,
+              "minItems": 3
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kelvin": {
+                  "type": "number",
+                  "minimum": 1667,
+                  "maximum": 25000
+                }
+              },
+              "required": [
+                "kelvin"
+              ],
+              "patternProperties": {
+                "^x-[A-Za-z0-9]": true
+              },
+              "additionalProperties": false
+            }
+          ]
+        },
+        "recolor": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/keyframes"
+                },
+                {
+                  "properties": {
+                    "keys": {
+                      "items": {
+                        "prefixItems": [
+                          true,
+                          {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "points": {
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "type": "object",
+            "properties": {
+              "x": {
+                "type": "number",
+                "minimum": -1,
+                "maximum": 2
+              },
+              "y": {
+                "type": "number",
+                "minimum": -1,
+                "maximum": 2
+              },
+              "radius": {
+                "anyOf": [
+                  {
+                    "type": "number",
+                    "minimum": 0.001,
+                    "maximum": 0.2
+                  },
+                  {
+                    "allOf": [
+                      {
+                        "$ref": "#/$defs/keyframes"
+                      },
+                      {
+                        "properties": {
+                          "keys": {
+                            "items": {
+                              "prefixItems": [
+                                true,
+                                {
+                                  "type": "number",
+                                  "minimum": 0.001,
+                                  "maximum": 0.2
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                ]
+              },
+              "intensity": {
+                "anyOf": [
+                  {
+                    "type": "number",
+                    "minimum": -10,
+                    "maximum": 10
+                  },
+                  {
+                    "allOf": [
+                      {
+                        "$ref": "#/$defs/keyframes"
+                      },
+                      {
+                        "properties": {
+                          "keys": {
+                            "items": {
+                              "prefixItems": [
+                                true,
+                                {
+                                  "type": "number",
+                                  "minimum": -10,
+                                  "maximum": 10
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                ]
+              },
+              "color": {
+                "anyOf": [
+                  {
+                    "type": "array",
+                    "prefixItems": [
+                      {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 16
+                      },
+                      {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 16
+                      },
+                      {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 16
+                      }
+                    ],
+                    "items": false,
+                    "minItems": 3
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kelvin": {
+                        "type": "number",
+                        "minimum": 1667,
+                        "maximum": 25000
+                      }
+                    },
+                    "required": [
+                      "kelvin"
+                    ],
+                    "patternProperties": {
+                      "^x-[A-Za-z0-9]": true
+                    },
+                    "additionalProperties": false
+                  }
+                ]
+              }
+            },
+            "required": [
+              "x",
+              "y",
+              "radius",
+              "intensity"
+            ],
+            "patternProperties": {
+              "^x-[A-Za-z0-9]": true
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "threshold",
+        "softness",
+        "contrast",
+        "minSize",
+        "maxSize",
+        "intensity",
+        "glow",
+        "glowRadius",
+        "throw",
+        "falloff",
+        "color",
+        "recolor"
+      ],
+      "patternProperties": {
+        "^x-[A-Za-z0-9]": true
+      },
+      "additionalProperties": false
+    },
+    "params:lens.vignette@1": {
+      "type": "object",
+      "properties": {
+        "strength": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": -1,
+              "maximum": 1
+            },
+            {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/keyframes"
+                },
+                {
+                  "properties": {
+                    "keys": {
+                      "items": {
+                        "prefixItems": [
+                          true,
+                          {
+                            "type": "number",
+                            "minimum": -1,
+                            "maximum": 1
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "exposure": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": -8,
+              "maximum": 4
+            },
+            {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/keyframes"
+                },
+                {
+                  "properties": {
+                    "keys": {
+                      "items": {
+                        "prefixItems": [
+                          true,
+                          {
+                            "type": "number",
+                            "minimum": -8,
+                            "maximum": 4
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "radius": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 2
+            },
+            {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/keyframes"
+                },
+                {
+                  "properties": {
+                    "keys": {
+                      "items": {
+                        "prefixItems": [
+                          true,
+                          {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 2
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "softness": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 2
+            },
+            {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/keyframes"
+                },
+                {
+                  "properties": {
+                    "keys": {
+                      "items": {
+                        "prefixItems": [
+                          true,
+                          {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 2
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "roundness": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/keyframes"
+                },
+                {
+                  "properties": {
+                    "keys": {
+                      "items": {
+                        "prefixItems": [
+                          true,
+                          {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "center": {
+          "type": "array",
+          "prefixItems": [
+            {
+              "type": "number",
+              "minimum": -4,
+              "maximum": 4
+            },
+            {
+              "type": "number",
+              "minimum": -4,
+              "maximum": 4
+            }
+          ],
+          "items": false,
+          "minItems": 2
+        }
+      },
+      "required": [
+        "radius",
+        "softness",
+        "roundness"
+      ],
+      "patternProperties": {
+        "^x-[A-Za-z0-9]": true
+      },
+      "additionalProperties": false,
+      "oneOf": [
+        {
+          "required": [
+            "strength"
+          ]
+        },
+        {
+          "required": [
+            "exposure"
+          ]
+        }
+      ]
+    },
+    "params:film.grain@1": {
+      "type": "object",
+      "properties": {
+        "size": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0.0002,
+              "maximum": 0.01
+            },
+            {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/keyframes"
+                },
+                {
+                  "properties": {
+                    "keys": {
+                      "items": {
+                        "prefixItems": [
+                          true,
+                          {
+                            "type": "number",
+                            "minimum": 0.0002,
+                            "maximum": 0.01
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "intensity": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 2
+            },
+            {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/keyframes"
+                },
+                {
+                  "properties": {
+                    "keys": {
+                      "items": {
+                        "prefixItems": [
+                          true,
+                          {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 2
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "response": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/keyframes"
+                },
+                {
+                  "properties": {
+                    "keys": {
+                      "items": {
+                        "prefixItems": [
+                          true,
+                          {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "chroma": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/keyframes"
+                },
+                {
+                  "properties": {
+                    "keys": {
+                      "items": {
+                        "prefixItems": [
+                          true,
+                          {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "seed": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "animate": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "size",
+        "intensity",
+        "response",
+        "chroma",
+        "seed",
+        "animate"
+      ],
+      "patternProperties": {
+        "^x-[A-Za-z0-9]": true
+      },
+      "additionalProperties": false
+    },
+    "params:film.halation@1": {
+      "type": "object",
+      "properties": {
+        "threshold": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0.01,
+              "maximum": 16
+            },
+            {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/keyframes"
+                },
+                {
+                  "properties": {
+                    "keys": {
+                      "items": {
+                        "prefixItems": [
+                          true,
+                          {
+                            "type": "number",
+                            "minimum": 0.01,
+                            "maximum": 16
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "knee": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 6
+            },
+            {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/keyframes"
+                },
+                {
+                  "properties": {
+                    "keys": {
+                      "items": {
+                        "prefixItems": [
+                          true,
+                          {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 6
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "radius": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 0.1
+            },
+            {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/keyframes"
+                },
+                {
+                  "properties": {
+                    "keys": {
+                      "items": {
+                        "prefixItems": [
+                          true,
+                          {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 0.1
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "intensity": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 4
+            },
+            {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/keyframes"
+                },
+                {
+                  "properties": {
+                    "keys": {
+                      "items": {
+                        "prefixItems": [
+                          true,
+                          {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 4
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "color": {
+          "anyOf": [
+            {
+              "type": "array",
+              "prefixItems": [
+                {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 16
+                },
+                {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 16
+                },
+                {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 16
+                }
+              ],
+              "items": false,
+              "minItems": 3
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kelvin": {
+                  "type": "number",
+                  "minimum": 1667,
+                  "maximum": 25000
+                }
+              },
+              "required": [
+                "kelvin"
+              ],
+              "patternProperties": {
+                "^x-[A-Za-z0-9]": true
+              },
+              "additionalProperties": false
+            }
+          ]
+        },
+        "bloom": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 2
+            },
+            {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/keyframes"
+                },
+                {
+                  "properties": {
+                    "keys": {
+                      "items": {
+                        "prefixItems": [
+                          true,
+                          {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 2
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "bloomRadius": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 0.1
+            },
+            {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/keyframes"
+                },
+                {
+                  "properties": {
+                    "keys": {
+                      "items": {
+                        "prefixItems": [
+                          true,
+                          {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 0.1
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "required": [
+        "threshold",
+        "knee",
+        "radius",
+        "intensity",
+        "color",
+        "bloom"
       ],
       "patternProperties": {
         "^x-[A-Za-z0-9]": true

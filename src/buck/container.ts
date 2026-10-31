@@ -46,7 +46,7 @@ function pathProblem(path:string):string|undefined{
   if(path.includes('..'))return `„${path}“ enthält „..“.`;
   if(path.split('/').some(s=>s===''||s==='.'))return `„${path}“ enthält leere Pfadsegmente oder ist ein Verzeichnis.`;
   if(path.length>255)return `„${path.slice(0,40)}…“ ist länger als 255 Zeichen.`;
-  const allowed=RESERVED.has(path)||/^luts\/[^/]+\.cube$/.test(path)||/^thumbs\/(before|after)\.(jpg|png)$/.test(path)||path==='thumbs/aux-depth.png'||/^masks\/[^/]+\.png$/.test(path)||path==='meta/recipe.json'||/^ext\/[^/]+\/.+/.test(path);
+  const allowed=RESERVED.has(path)||/^luts\/[^/]+\.cube$/.test(path)||/^thumbs\/(before|after)\.(jpg|png)$/.test(path)||path==='thumbs/aux-depth.png'||/^masks\/[^/]+\.png$/.test(path)||/^skies\/[^/]+\.png$/.test(path)||path==='meta/recipe.json'||/^ext\/[^/]+\/.+/.test(path);
   return allowed?undefined:`„${path}“ ist an dieser Stelle im Container nicht erlaubt.`;
 }
 
@@ -214,6 +214,7 @@ export function missingFiles(graph:BuckGraph,files:Map<string,Uint8Array>):strin
   const refs:string[]=[];
   for(const n of graph.nodes){
     if(n.type==='color.lut3d@1'||n.type==='mask.image@1')refs.push(n.params.file);
+    if(n.type==='sky.replace@1'&&n.params.source==='image'&&n.params.file)refs.push(n.params.file);
     if(n.type==='color.look@1'&&n.params.bakedLut)refs.push(n.params.bakedLut);
   }
   const t=graph.meta.thumbnails;

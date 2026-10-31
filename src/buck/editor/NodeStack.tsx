@@ -1,9 +1,13 @@
 import { useId, useRef, useState } from 'react';
 import { ChevronDown, ChevronUp, Eye, EyeOff, Lock, Plus, Trash2 } from 'lucide-react';
-import { NODE_CATALOG, addNode, ensureConversions, ensureInputs, imageChain, isAutoNode, maskNodes, moveNode, removeNode } from './chain';
+import { LEVELS, NODE_CATALOG, addNode, ensureConversions, ensureInputs, imageChain, isAutoNode, levelGroups, maskNodes, moveNode, removeNode } from './chain';
+import type { CatalogGroup } from './chain';
 import { catalogEntry, nodeTitle } from './controls';
+import { TIME_OF_DAY_OPTIONS, TOD_KEY, applyTimeOfDay, isTimeOfDayNode, timeOfDayOf } from '../prompt';
+import type { TimeOfDay } from '../prompt';
 import type { BuckGraph, BuckNode, NodeType } from '../types';
-import type { NodeCatalogEntry, UpdateGraph } from './types';
+import type { UpdateGraph } from './types';
+import './levels.css';
 
 /** Re-derives auto conversions and input declarations; idempotent, applied after every stack edit. */
 export const tidy=(g:BuckGraph)=>ensureInputs(ensureConversions(g));
@@ -22,7 +26,10 @@ export function addToStack(graph:BuckGraph,type:NodeType,selected?:string){
 }
 export const removeFromStack=(graph:BuckGraph,id:string)=>tidy(removeNode(graph,id));
 export const moveInStack=(graph:BuckGraph,id:string,dir:-1|1)=>tidy(moveNode(graph,id,dir));
-const GROUPS:NodeCatalogEntry['group'][]=['Farbe','Raum','Licht','Maske'];
+/** Time-of-day switch: applies the preset (or removes the switch's nodes for "as-shot") and tidies the graph. */
+export const setTimeOfDay=(graph:BuckGraph,preset:TimeOfDay)=>tidy(applyTimeOfDay(graph,preset).graph);
+/** Menu groups in level order (light → atmosphere → optics → grade), masks last. */
+const GROUPS:CatalogGroup[]=['Licht','Raum','Optik','Farbe','Maske'];
 export const catalogGroups=()=>GROUPS.map(group=>({group,entries:NODE_CATALOG.filter(e=>e.group===group)})).filter(g=>g.entries.length);
 
 const message=(e:unknown)=>e instanceof Error?e.message:String(e);
@@ -47,10 +54,11 @@ export function NodeStack({graph,selected,onSelect,updateGraph}:Props){
   }
   function closeMenu(){setOpen(false);toggleRef.current?.focus();}
 
-  const chain=imageChain(graph),userChain=chain.filter(n=>!isAutoNode(n)),masks=maskNodes(graph);
+  const chain=imageChain(graph),userChain=chain.filter(n=>!isAutoNode(n)),masks=maskNodes(graph),levels=levelGroups(graph),tod=timeOfDayOf(graph);
   const item=(n:BuckNode,group:BuckNode[])=>{
     const auto=isAutoNode(n),active=n.id===selected,title=nodeTitle(n),off=n.enabled===false,i=group.indexOf(n);
-    const sub=[auto?'automatisch':catalogEntry(n.type)?.label??n.type,n.id,n.inputs.mask?`Maske: ${n.inputs.mask}`:'',off?'aus':''].filter(Boolean).join(' · ');
+    const byTod=isTimeOfDayNode(n)?'Tageszeit':TOD_KEY in n?'von der Tageszeit angepasst':'';
+    const sub=[auto?'automatisch':catalogEntry(n.type)?.label??n.type,n.id,n.inputs.mask?`Maske: ${n.inputs.mask}`:'',byTod,off?'aus':''].filter(Boolean).join(' · ');
     return <li key={n.id} className={`buck-item${active?' buck-item-active':''}${auto||off?' buck-muted':''}`} style={{display:'flex',alignItems:'center',gap:4}}>
       <button type="button" className="buck-button" aria-current={active||undefined} onClick={()=>onSelect(active?undefined:n.id)}
         style={{flex:1,minWidth:0,textAlign:'left',display:'grid'}}>
@@ -66,6 +74,14 @@ export function NodeStack({graph,selected,onSelect,updateGraph}:Props){
     </li>;
   };
   return <section className="buck-panel" aria-label="Knotenliste">
+    <div className="buck-tod" role="radiogroup" aria-label="Tageszeit">
+      <span className="buck-tod-title">Tageszeit</span>
+      <div className="buck-tod-options">
+        {TIME_OF_DAY_OPTIONS.map(o=><button key={o.value} type="button" role="radio" aria-checked={tod===o.value} className={`buck-tod-option${tod===o.value?' buck-tod-active':''}`}
+          onClick={()=>{if(o.value!==tod)run(g=>setTimeOfDay(g,o.value));}}>{o.label}</button>)}
+      </div>
+      <small className="buck-muted">Setzt Himmel, Szenenbelichtung, Grade und bei Bedarf Mond- oder Sonnenlicht als normale Knoten (Kennung „tod-“). „Wie aufgenommen“ entfernt sie wieder.</small>
+    </div>
     <div style={{position:'relative'}}>
       <button ref={toggleRef} type="button" className="buck-button" aria-expanded={open} aria-controls={menuId} onClick={()=>setOpen(o=>!o)}><Plus size={14} aria-hidden="true"/> Knoten hinzufügen</button>
       <div id={menuId} hidden={!open} onKeyDown={e=>{if(e.key==='Escape'){e.stopPropagation();closeMenu();}}}>
@@ -80,7 +96,17 @@ export function NodeStack({graph,selected,onSelect,updateGraph}:Props){
     {error&&<p role="alert" className="buck-muted">{error}</p>}
     <h3 id={chainId}>Bildkette</h3>
     <p className="buck-muted">Quelle · {graph.colorManagement.input}</p>
-    <ul className="buck-list" aria-labelledby={chainId}>{chain.map(n=>item(n,userChain))}</ul>
+    <div aria-labelledby={chainId}>
+      {levels.groups.map((g,k)=>{
+        const info=LEVELS.find(l=>l.id===g.level)!;
+        return <section key={`${g.level}-${k}`} className={`buck-level buck-level-${g.level}${g.outOfOrder?' buck-level-off':''}`} aria-label={`Ebene ${info.label}`}>
+          <h4 className="buck-level-title">{info.label}{g.outOfOrder&&<span className="buck-level-warn" title="Diese Knoten stehen hinter einer späteren Ebene. Die Datei wird nicht umsortiert.">außerhalb der Reihenfolge</span>}</h4>
+          <p className="buck-muted buck-level-desc">{info.description}</p>
+          {g.nodes.length?<ul className="buck-list">{g.nodes.map(n=>item(n,userChain))}</ul>:<p className="buck-muted buck-level-empty">Keine Knoten.</p>}
+        </section>;
+      })}
+      {!levels.ordered&&<p className="buck-muted buck-level-note" role="note">Die Reihenfolge weicht von Licht → Atmosphäre → Optik → Grade ab. Sie bleibt, wie sie ist; neue Knoten kommen in ihre Ebene.</p>}
+    </div>
     <p className="buck-muted">Ausgabe · {graph.colorManagement.output}</p>
     <h3 id={maskId}>Masken</h3>
     {masks.length?<ul className="buck-list" aria-labelledby={maskId}>{masks.map(n=>item(n,masks))}</ul>:<p className="buck-muted">Keine Masken.</p>}

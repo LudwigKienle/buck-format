@@ -1,13 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { Check, FilePlus, FlaskConical, FolderOpen, ImageUp, LoaderCircle, Save, Sparkles, TriangleAlert, X } from 'lucide-react';
-import { bakeColorCube, bakeLookCube, serializeBuckCube } from '../bake';
 import { isLinearSpace, toSRGB8 } from '../colorspace';
 import { missingFiles, readBuck, writeBuck } from '../container';
 import { HEURISTIC_LABEL, heuristicDepth } from '../depth/heuristic';
 import { imageBuf } from '../field';
 import { emptyGraph, promptToGraph } from '../prompt';
 import { BUCK_MIMETYPE, LIMITS, PORTS } from '../types';
-import type { BuckGraph, BuckNode, ImageBuf, SpaceName } from '../types';
+import type { BuckGraph, ImageBuf, SpaceName } from '../types';
 import { checkGraph, parseGraph } from '../validate';
 import { download, loadAsset, readImage, safeName } from '../../image';
 import type { ImageAsset } from '../../image';
@@ -16,8 +15,11 @@ import { BuckViewer } from './BuckViewer';
 import { ensureConversions, ensureInputs, openForEditing } from './chain';
 import { NodeInspector } from './NodeInspector';
 import { NodeStack } from './NodeStack';
+import { ReferencePanel } from './ReferencePanel';
+import type { ReferenceApply } from './ReferencePanel';
+import { rememberModelFile } from '../reference/depth';
 import type { AuxState, EditorState, SourceImage, UpdateGraph, UpdateNode, ViewMode } from './types';
-import { bakedLutPath, renderOnce, thumbSize, useBuckRender } from './useBuckRender';
+import { BakeCancelled, bakeInWorker, renderFiles, renderOnce, thumbSize, useBuckRender } from './useBuckRender';
 import './buck.css';
 
 const INITIAL_PROMPT='Dune-Look, Dunst im Hintergrund, warmes Licht von links';
@@ -79,6 +81,8 @@ export function BuckEditor(){
   const [inputSpace,setInputSpace]=useState<SpaceName>(INPUT_SPACES[0]),[thumbs,setThumbs]=useState(true);
   const [loading,setLoading]=useState(false),[saving,setSaving]=useState(false),[error,setError]=useState(boot.error??''),[notice,setNotice]=useState('');
   const imageInput=useRef<HTMLInputElement>(null),buckInput=useRef<HTMLInputElement>(null),loadJob=useRef(0);
+  // Save runs: a new save cancels the bake of the running one (its result is dropped).
+  const saveJob=useRef(0),cancelBake=useRef<(()=>void)|null>(null),[saveStatus,setSaveStatus]=useState('');
   const render=useBuckRender(state);
 
   // Updates go through a ref so throwing transforms (chain limits) can be reported without touching state.
@@ -135,8 +139,10 @@ export function BuckEditor(){
     }catch(e){setError(`Die .buck-Datei konnte nicht geöffnet werden: ${message(e)}`);}
   }
   async function saveBuck(){
-    if(saving)return;setSaving(true);setError('');
-    await new Promise(r=>setTimeout(r,0)); // let the busy state paint before the bakes block the main thread
+    // Saving again while a save runs restarts it with the current state: the running bake worker is terminated.
+    cancelBake.current?.();cancelBake.current=null;
+    const id=++saveJob.current,current=()=>id===saveJob.current;
+    setSaving(true);setError('');setSaveStatus('Backe Cubes …');
     const snap=ref.current,notes:string[]=[];
     try{
       let g=normalize(snap.graph);
@@ -144,17 +150,16 @@ export function BuckEditor(){
       if(absent.length)throw new Error(`Im Paket fehlt ${absent.length===1?'die Datei':'Dateien'} ${absent.map(p=>`„${p}“`).join(', ')}. Bitte im Knoten laden oder den Knoten entfernen.`);
       // Unreferenced luts/ and masks/ entries (old uploads, previous bakes) are dropped; meta/ and ext/ are kept.
       const files=new Map([...snap.files].filter(([p])=>refs.has(p)||!(p.startsWith('luts/')||p.startsWith('masks/')||p.startsWith('thumbs/'))));
-      const taken=new Set([...files.keys()]),enc=new TextEncoder();
-      const nodes:BuckNode[]=g.nodes.map(n=>{
-        if(n.type!=='color.look@1')return n;
-        const path=bakedLutPath(n.id,taken);
-        files.set(path,enc.encode(serializeBuckCube(bakeLookCube(n.params,LUT_SIZE),LUT_SIZE,`${g.meta.name} · ${n.label??n.id}`,n.params.space,n.params.space)));
-        return {...n,params:{...n.params,bakedLut:path}};
-      });
-      g={...g,nodes};
-      const cm=g.colorManagement,fb=bakeColorCube(g,files,LUT_SIZE);
-      files.set(FALLBACK_PATH,enc.encode(serializeBuckCube(fb.data,LUT_SIZE,`${g.meta.name} · nur Farbe`,cm.input,cm.output)));
-      g={...g,fallback:{cube:FALLBACK_PATH,inputSpace:cm.input,outputSpace:cm.output,covers:fb.covers,omits:fb.omits}};
+      // The 64³ bakes (look cubes, fallback) run in bake.worker.ts; the main thread stays responsive.
+      const bake=bakeInWorker({jobId:id,graph:g,files:renderFiles(g,files),taken:[...files.keys()],size:LUT_SIZE,fallbackPath:FALLBACK_PATH},
+        (p,label)=>{if(current())setSaveStatus(`${label} · ${Math.round(p*100)} %`);});
+      cancelBake.current=bake.cancel;
+      const fb=await bake.done;
+      if(!current())return;
+      cancelBake.current=null;
+      for(const [path,bytes] of fb.entries)files.set(path,bytes);
+      g=fb.graph;
+      setSaveStatus(thumbs&&snap.source?'Vorschaubilder …':'Packe Archiv …');
       const meta={...g.meta},thumbnails:{before?:string;after?:string}={};delete meta.thumbnails;
       if(thumbs&&snap.source){
         const img=snap.source.image;
@@ -168,13 +173,31 @@ export function BuckEditor(){
       const problems=checkGraph(g),dangling=missingFiles(g,files);
       if(problems.length)throw new Error(problems.slice(0,3).join(' · '));
       if(dangling.length)throw new Error(`Der Graph verweist auf fehlende Dateien: ${dangling.join(', ')}.`);
+      if(!current())return;
       const bytes=await writeBuck(g,files);
+      if(!current())return;
       download(new Uint8Array(bytes),`${safeName(g.meta.name)}.buck`,BUCK_MIMETYPE);
       // Edits made while saving win; the baked state is only adopted if the graph is still the saved one.
       update(s=>s.graph===snap.graph?{...s,graph:g,files}:s);
       setNotice(`.buck gespeichert · ${(bytes.length/1048576).toFixed(1)} MB · Fallback-Cube deckt ${fb.covers.length} Knoten, lässt ${fb.omits.length} räumliche weg${notes.length?' · '+notes.join(' · '):''}`);
-    }catch(e){setError(`Speichern fehlgeschlagen: ${message(e)}`);}
-    finally{setSaving(false);}
+    }catch(e){if(current()&&!(e instanceof BakeCancelled))setError(`Speichern fehlgeschlagen: ${message(e)}`);}
+    finally{if(current()){setSaving(false);setSaveStatus('');cancelBake.current=null;}}
+  }
+  useEffect(()=>()=>{cancelBake.current?.();},[]);
+  // The ONNX file picked in the aux panel is remembered for this session, so the reference analysis can use the same pinned
+  // model for the reference image without a second pick (capture phase: runs before AuxPanel clears the input).
+  const auxWrap=useRef<HTMLDivElement>(null);
+  useEffect(()=>{
+    const el=auxWrap.current;if(!el)return;
+    const onChange=(e:Event)=>{const t=e.target;if(t instanceof HTMLInputElement&&t.type==='file'&&t.accept==='.onnx'){const f=t.files?.[0];if(f)rememberModelFile(f);}};
+    el.addEventListener('change',onChange,true);return()=>el.removeEventListener('change',onChange,true);
+  },[]);
+  function applyReference(r:ReferenceApply){
+    try{
+      update(s=>({...s,graph:normalize(r.graph),files:new Map([...s.files,...r.files]),selected:undefined}));
+      setUnderstood(r.applied.map(a=>`Referenz · ${a}`));setPromptMiss(false);
+      setNotice(`„${r.graph.meta.name}“ aus dem Referenzbild erzeugt · ${r.graph.nodes.length} Knoten`);
+    }catch(e){setError(message(e));}
   }
 
   const {graph,source,aux}=state,result=render.result;
@@ -182,7 +205,10 @@ export function BuckEditor(){
   const labelOf=(id:string)=>{const n=graph.nodes.find(x=>x.id===id);return n?.label?`${n.label} (${id})`:id;};
   const displayIn=!isLinearSpace(graph.colorManagement.input)&&graph.nodes.some(n=>(PORTS as Partial<Record<string,{space:string}>>)[n.type]?.space==='linear');
   const busy=render.busy||loading;
-  const status=loading?'Bild wird geladen …':!source?'Kein Bild geladen.':render.busy?'Wird gerendert …':result?`Gerendert in ${Math.round(result.ms)} ms · ${result.width}×${result.height} px`:render.error?'Render fehlgeschlagen.':'Bereit.';
+  const reduced=result&&render.scale<1?result:undefined;
+  const status=loading?'Bild wird geladen …':!source?'Kein Bild geladen.'
+    :reduced?`Vorschau ½ · ${reduced.width}×${reduced.height} px in ${Math.round(reduced.ms)} ms${render.busy?' · volle Auflösung wird gerendert …':''}`
+    :render.busy?'Wird gerendert …':result?`Gerendert in ${Math.round(result.ms)} ms · ${result.width}×${result.height} px`:render.error?'Render fehlgeschlagen.':'Bereit.';
 
   return <div className="buck-editor">
     <div className="buck-toolbar" role="toolbar" aria-label=".buck-Werkzeuge">
@@ -197,12 +223,13 @@ export function BuckEditor(){
         <label className="buck-field buck-frame"><span>Frame</span><input type="number" min={0} max={1000000} step={1} value={state.frame} aria-label="Frame für Keyframes" onChange={e=>{const f=Math.max(0,Math.min(1000000,Math.round(Number(e.target.value)||0)));update(s=>({...s,frame:f}));}}/></label>
         <label className="buck-check" title="Vorschaubilder zeigen Produktionsmaterial (Spec §11.8)"><input type="checkbox" checked={thumbs} onChange={e=>setThumbs(e.target.checked)}/>Vorschaubilder einbetten</label>
         <button className="buck-tool" onClick={()=>buckInput.current?.click()}><FolderOpen size={15}/>.buck öffnen</button>
-        <button className="buck-tool buck-primary" onClick={()=>void saveBuck()} disabled={saving||!graph.meta.name.trim()}>{saving?<LoaderCircle size={15} className="spin"/>:<Save size={15}/>}{saving?'Speichern …':'.buck speichern'}</button>
+        <button className="buck-tool buck-primary" onClick={()=>void saveBuck()} disabled={!graph.meta.name.trim()} title={saving?'Erneut klicken: aktuelles Speichern abbrechen und mit dem jetzigen Stand neu starten':undefined}>{saving?<LoaderCircle size={15} className="spin"/>:<Save size={15}/>}{saving?`Speichern … ${saveStatus}`:'.buck speichern'}</button>
       </div>
     </div>
     <div className="buck-layout">
       <aside className="buck-col buck-left" aria-label="Knoten"><NodeStack graph={graph} selected={state.selected} onSelect={(id?:string)=>update(s=>({...s,selected:id}))} updateGraph={updateGraph}/></aside>
       <main className="buck-col buck-center">
+        <ReferencePanel graph={graph} source={source} aux={aux} onApply={applyReference}/>
         <section className="buck-prompt" aria-label="Look beschreiben">
           <div className="buck-prompt-row">
             <textarea value={draft} rows={2} maxLength={LIMITS.promptChars} aria-label="Look-Beschreibung" placeholder="z. B. Fargo-Look, Nebel im Hintergrund, warmes Licht von links" onChange={e=>{setDraft(e.target.value);setPromptMiss(false);}} onKeyDown={e=>{if(e.key==='Enter'&&(e.metaKey||e.ctrlKey)){e.preventDefault();applyPrompt();}}}/>
@@ -217,13 +244,15 @@ export function BuckEditor(){
         <BuckViewer state={state} result={result} busy={busy} onView={(v:ViewMode)=>update(s=>({...s,view:v}))}/>
         <div className="buck-status" aria-live="polite">
           <span className={`status-dot ${result&&!busy?'ready':''}`}/>{status}
+          {reduced&&<span className="buck-badge warn" title="Reduzierte Auflösung während schneller Änderungen (Spec §10); die volle Auflösung folgt automatisch.">Vorschau ½</span>}
+          {saving&&saveStatus&&<span className="buck-badge" role="status">Speichern: {saveStatus}</span>}
           {aux.depthSource==='heuristic'&&<span className="buck-badge warn">Tiefe: {HEURISTIC_LABEL}</span>}
           {source&&<span className="buck-badge">{source.name} · gelesen als {source.image.space}</span>}
         </div>
         {displayIn&&<p className="buck-note"><TriangleAlert size={13}/>Display-Eingang: Die Linearisierung ergibt Display-Licht, keine Szenenlinearität. Spitzlichter sind bereits beschnitten (Spec §8).</p>}
         {result&&result.warnings.length>0&&<ul className="buck-warnings" aria-label="Warnungen">{result.warnings.map(w=><li key={w}><TriangleAlert size={13}/>{w}</li>)}</ul>}
         {result&&result.bypassed.length>0&&<p className="buck-note">Überbrückt: {result.bypassed.map(labelOf).join(', ')}</p>}
-        <AuxPanel graph={graph} source={source} aux={aux} setAux={setAux} updateGraph={updateGraph}/>
+        <div ref={auxWrap} className="buck-aux-wrap"><AuxPanel graph={graph} source={source} aux={aux} setAux={setAux} updateGraph={updateGraph}/></div>
       </main>
       <aside className="buck-col buck-right" aria-label="Parameter"><NodeInspector graph={graph} node={selectedNode} updateNode={updateNode} updateGraph={updateGraph} files={state.files} setFile={setFile}/></aside>
     </div>

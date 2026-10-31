@@ -219,12 +219,21 @@ function heuristicInput(w:number,h:number){
   return img;
 }
 describe('heuristicDepth',()=>{
-  it('returns a finite field in 0…1 at source size, labelled as a fallback',()=>{
+  it('returns depth in 0…1 (+Infinity only for detected sky) at source size, labelled as a fallback',()=>{
     const d=heuristicDepth(heuristicInput(300,200));
     expect([d.kind,d.width,d.height]).toEqual(['scalar',300,200]);
-    expect(d.data.every(v=>Number.isFinite(v)&&v>=0&&v<=1)).toBe(true);
-    expect(Math.min(...d.data)).toBeLessThan(.05);expect(Math.max(...d.data)).toBeGreaterThan(.95);
+    expect(d.data.every(v=>v===Infinity||(Number.isFinite(v)&&v>=0&&v<=1))).toBe(true);
+    const finite=d.data.filter(Number.isFinite);
+    expect(Math.min(...finite)).toBeLessThan(.05);expect(Math.max(...d.data)).toBeGreaterThan(.95);
     expect(HEURISTIC_LABEL).toMatch(/Behelf/);
+  });
+  it('marks a smooth sky at the top as invalid depth, like a depth model',()=>{
+    const w=160,h=90,img=imageBuf(w,h,'lin_rec709_srgb');
+    for(let y=0;y<h;y++)for(let x=0;x<w;x++){const i=(y*w+x)*4,top=y<h*.4;const n=((x*7+y*13)%11)/11;
+      const c=top?[.45+.1*y/h,.62+.05*y/h,.9]:[.55+.3*n,.42+.25*n,.25+.2*n];img.data[i]=c[0];img.data[i+1]=c[1];img.data[i+2]=c[2];img.data[i+3]=1;}
+    const d=heuristicDepth(img);let sky=0,ground=0;
+    for(let y=0;y<h;y++)for(let x=0;x<w;x++){const v=d.data[y*w+x];if(y<h*.3&&v===Infinity)sky++;if(y>h*.6&&v===Infinity)ground++;}
+    expect(sky).toBeGreaterThan(w*h*.3*.8);expect(ground).toBe(0);
   });
   it('puts hazy, flat, upper regions farther than saturated textured foreground',()=>{
     const d=heuristicDepth(heuristicInput(120,80)),mean=(y0:number,y1:number)=>{let s=0;for(let y=y0;y<y1;y++)for(let x=0;x<120;x++)s+=d.data[y*120+x];return s/((y1-y0)*120);};

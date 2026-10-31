@@ -47,9 +47,9 @@ describe('stack edits',()=>{
     const g=fixture();expect(checkGraph(g)).toEqual([]);
     const t=tidy(g);expect(tidy(t)).toEqual(t);expect(checkGraph(t)).toEqual([]);
   });
-  it('groups the catalog in Farbe, Raum, Licht, Maske order and covers every type',()=>{
+  it('groups the catalog in level order (Licht, Raum, Optik, Farbe) plus Maske and covers every type',()=>{
     const groups=catalogGroups();
-    expect(groups.map(g=>g.group)).toEqual(['Farbe','Raum','Licht','Maske']);
+    expect(groups.map(g=>g.group)).toEqual(['Licht','Raum','Optik','Farbe','Maske']);
     expect(groups.flatMap(g=>g.entries).length).toBe(NODE_CATALOG.length);
   });
   it('adds every catalog type into a valid graph',()=>{

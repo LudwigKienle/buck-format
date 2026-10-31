@@ -1,8 +1,8 @@
 # `.buck` – Look-Format mit räumlichen Effekten
 
-Status: **Entwurf 0.1, Konzept und Spezifikation** · Stand: 30.10.2026 · Referenz-Prototyp: Web-Engine und Editor unter `src/buck/` (Phase 2 und Teile von Phase 4); OFX-Unterstützung (Phase 3) steht noch aus.
+Status: **Entwurf 0.1, Konzept und Spezifikation** · Stand: 31.10.2026 · Referenz-Prototyp: Web-Engine und Editor unter `src/buck/` (Phase 2 und Teile von Phase 4, dazu die Optik-Knoten §5.3.6–§5.3.8); OFX-Unterstützung (Phase 3) steht noch aus. Umsetzungsstand: §14.
 
-Dieses Dokument beschreibt ein eigenes Austauschformat für Buckswood Auto LUT. Eine `.buck`-Datei enthält einen Farblook. Sie kann außerdem räumliche Effekte enthalten, die eine 3D-LUT grundsätzlich nicht abbilden kann, nämlich atmosphärischen Nebel, Tiefenschärfe und Relight. Die Datei beschreibt diese Effekte als **deklarativen, parametrischen Knotengraphen**. Sie enthält keinen ausführbaren Code. Jeder Host, der die Spezifikation umsetzt, soll aus derselben Datei und denselben Hilfskanälen innerhalb festgelegter Toleranzen dasselbe Bild erzeugen.
+Dieses Dokument beschreibt ein eigenes Austauschformat für Buckswood Auto LUT. Eine `.buck`-Datei enthält einen Farblook. Sie kann außerdem räumliche Effekte enthalten, die eine 3D-LUT grundsätzlich nicht abbilden kann, nämlich atmosphärischen Nebel, Himmel, Tiefenschärfe, Relight und Lampen sowie Objektiv- und Filmeffekte (Vignette, Halation, Filmkorn). Die Datei beschreibt diese Effekte als **deklarativen, parametrischen Knotengraphen**. Sie enthält keinen ausführbaren Code. Jeder Host, der die Spezifikation umsetzt, soll aus derselben Datei und denselben Hilfskanälen innerhalb festgelegter Toleranzen dasselbe Bild erzeugen.
 
 Begriffe: **MUSS**, **SOLL** und **KANN** werden im Sinne von RFC 2119 verwendet. **Host** ist die ausführende Anwendung (Web-Editor, OFX-Plugin in Resolve oder Baselight, spätere Exporter). **Hilfskanal** ist ein nicht farbliches Bildsignal wie Tiefe, Normalen oder Maske.
 
@@ -20,8 +20,8 @@ Begriffe: **MUSS**, **SOLL** und **KANN** werden im Sinne von RFC 2119 verwendet
 
 ### 1.2 Nicht-Ziele (Version 1)
 
-- Kein Compositing-Werkzeug: kein Tracking, Rotoscoping, Keying, Partikel und keine 3D-Szenenrekonstruktion.
-- Keine generative KI. Die Pixel des Ausgangsbilds werden nur gefiltert und gemischt, nie neu erfunden. ML wird ausschließlich zur Schätzung von Hilfskanälen eingesetzt.
+- Kein Compositing-Werkzeug: kein Tracking, Rotoscoping, allgemeines Keying, Partikel und keine 3D-Szenenrekonstruktion. Erlaubt ist der Himmelsersatz `sky.replace@1` (§5.3.4): Seine Maske kommt aus der Tiefe (ungültig oder fern) und wird nur in einem schmalen Kantenband farblich verfeinert. Ein frei wählbarer Farb- oder Luminanz-Key ist das nicht.
+- Keine generative KI. Die Pixel des Ausgangsbilds werden nur gefiltert und gemischt, nie neu erfunden. ML wird ausschließlich zur Schätzung von Hilfskanälen eingesetzt. Ein prozeduraler Himmel (§5.3.4) ist eine feste, deterministische Formel (Verlauf, Rauschen auf festem Gitter, Hash-Sterne) und kein gelerntes Modell; ein Himmelsbild muss im Archiv liegen.
 - Kein Ersatz für OCIO oder ACES. `.buck` nutzt deren Farbraumbezeichnungen (§8) und definiert keine eigene Farbraumverwaltung.
 - Keine frei programmierbaren Knoten. Neue Effekte kommen als neue, versionierte Knotentypen in die Spezifikation.
 
@@ -102,7 +102,8 @@ Eine `.buck`-Datei ist ein ZIP-Archiv ([PKWARE APPNOTE](https://pkware.cachefly.
 | `luts/*.cube` | nein | Eingebettete 3D-LUTs (Iridas/BMD, reiner 3D-Teil, wie `native/ofx` sie heute liest) |
 | `thumbs/before.jpg`, `thumbs/after.jpg` | nein | Vorschaubilder, JPEG oder PNG, sRGB, längste Seite ≤ 1024 px |
 | `thumbs/aux-depth.png` | nein | Vorschau eines Hilfskanals (16-Bit-Graustufen-PNG), nur zur Anzeige |
-| `masks/*.png` | nein | Statische Formmasken (z. B. Vignette), 8/16-Bit-Graustufen, auflösungsunabhängig skaliert |
+| `masks/*.png` | nein | Statische Formmasken (z. B. eine gezeichnete Form), 8/16-Bit-Graustufen, auflösungsunabhängig skaliert; für eine Randabdunklung gibt es `lens.vignette@1` (§5.3.6) |
+| `skies/*.png` | nein | Himmelsbilder für `sky.replace@1` mit `source: "image"` (§5.3.4). PNG mit sRGB-Kodierung, 8/16 Bit, geprüft wie Masken (§11.4). JPEG ist in Version 1 nicht erlaubt, weil der Referenzleser keinen geprüften JPEG-Decoder hat. |
 | `meta/recipe.json` | nein | Optionales Buckswood-Rezept als Provenienz |
 | `ext/<vendor>/…` | nein | Erweiterungsdaten; ein Reader MUSS sie ignorieren können |
 
@@ -268,12 +269,113 @@ Farbraumkonvertierung zwischen zwei in §8 erlaubten Namen. Dieser Knoten ist de
   - `softness` (0…1): Wrap-Faktor `w = softness` und zusätzlich eine Glättung der Normalen mit Radius `softness · 0.01` Bildbreiten.
   - `mode`: `"add"` (Standard; Licht wird hinzugefügt) oder `"reshape"` (vorhandene Schattierung wird teilweise ersetzt, §15 Frage 8).
   - `preserveHighlights` (0…1).
+  - `skinProtect` (optional, 0…1, animierbar): Hautschutz. Fehlt das Feld, gilt 0; das Ergebnis ist dann bitgleich zur Fassung ohne dieses Feld. Optionales Feld nach §4.2 (neues MINOR), daher bleibt die Knotenversion `@1`.
 - Referenzmathematik `add`:
   `L` ist der Lichtvektor aus `azimuth` und `elevation`.
   `lambert = max(0, (dot(n, L) + w) / (1 + w))`.
   `albedo ≈ in / max(ε, Y(in_lowpass))` ist eine grobe Albedo-Schätzung aus dem Verhältnis von Bild und tiefpassgefilterter Luminanz. Der Tiefpassradius ist fest in der Knotenversion.
   `out = in + albedo · color · (2^intensity − 1) · 0.18 · lambert`.
-- Grenzen: Relight ändert keine Schattenwürfe, Spiegelungen oder Subsurface-Streuung. In Version 1 entstehen keine Schatten. Die Albedo-Schätzung ist heuristisch. Haut verlangt besondere Vorsicht; ein `skinProtect` wie in `color.look` ist eine offene Frage (§15 Frage 8).
+  Dazu kommt `(1 − preserveHighlights · smoothstep(0,5; 1; Y(in)))` als Faktor auf `lambert` (Referenzimplementierung).
+- Hautschutz, wenn `skinProtect` > 0: `s = skinProtect · 0,85 · skinKey(c)`. `c` ist der Pixel, umgerechnet nach `Rec.1886 Rec.709 - Display` (Codewerte); `skinKey` ist der weiche Farbschlüssel aus `src/color/look.ts`, derselbe wie bei `color.look@1` (Rot > Grün > Blau in begrenztem Abstand, mittlere Sättigung, Luma zwischen 0,04 und 0,98). Er ist **kein Gesichts- oder Hauterkenner**: Holz, Sand oder Ziegel in Hauttönen werden ebenfalls geschützt, gefärbte Haut unter farbigem Licht eventuell nicht. Auf solchen Pixeln wird die Lichtfarbe zu einem Neutral gleicher Luminanz gezogen, `color' = color + s · (Y(color) − color)`, und das zugefügte Licht auf `1 − s/2` gedämpft. Ohne Hautton (`s = 0`) bleibt die Formel unverändert.
+- Grenzen: Relight ändert keine Schattenwürfe, Spiegelungen oder Subsurface-Streuung. In Version 1 entstehen keine Schatten. Die Albedo-Schätzung ist heuristisch. Der Hautschutz mildert Farbstich und Überstrahlung auf Haut, ersetzt aber kein Licht, das für Gesichter gesetzt wurde (§15 Frage 8).
+- Editor-Funktion: „Hauttöne schützen“, „Hautschutz“ oder „protect skin“ im Prompt setzt `skinProtect: 1` auf dem Relight (auch auf dem Mond- oder Sonnenlicht des Tageszeit-Schalters) und wie bisher den Hautschutz im Look.
+
+#### 5.3.4 `sky.replace@1` – Himmel ersetzen, tiefenbasiert
+
+- Eingänge: `image` (linear), `depth` (`scalar`, Pflicht), optional `mask`. `mask` und `amount` mischt der Renderer wie bei jedem Bildknoten **nach** dem Knoten (§5.1). Der Knoten selbst liest `mask` nicht, damit sie nicht doppelt wirkt.
+- Parameter:
+  - `source`: `"procedural"` oder `"image"`; bei `"image"` ist `file` (`skies/<name>.png`, §3.2) Pflicht.
+  - `preset`: `night`, `starry-night`, `moonrise`, `twilight`, `blue-hour`, `golden-hour`, `overcast`, `clear-day`, `storm`, `sandstorm`, `aurora` oder `neon-night`. Hat keine Renderwirkung, dokumentiert nur die Herkunft der Werte. Alle Werte stehen explizit im Knoten. Die Vorlagenwerte sind redaktionell und gehören zum Editor, nicht zum Format.
+  - `zenith`, `horizon`: Farbe oben bzw. am Horizont, linear im Arbeitsraum oder `{"kelvin": K}`, relativ zu 18 % Grau.
+  - `horizonY` (optional): Horizonthöhe in Bildbreiten (0 = oberer Rand). Fehlt der Wert, gilt der automatische Horizont: die Unterkante der untersten Pixelzeile, deren Himmelsanteil mindestens 1/64 beträgt (ohne Himmel H/(2W)).
+  - `gradientPower` (0,05…10), `exposure` (EV), `glow` (0…8) und `glowColor`: Horizontglühen.
+  - `stars` (0…1, Dichte), `milkyWay` (0…1), `clouds` (Bedeckung 0…1), `cloudContrast` (0…1), `cloudScale` (Bildbreiten), `cloudColor`, `aurora` (0…4).
+  - `moon` (optional): `{x, height, radius, intensity, color?}`. Dabei ist `x` normiert, `height` die Höhe der Mondmitte über dem Horizont in Bildbreiten, `radius` in Bildbreiten und `intensity` in EV relativ zu 0,18. `color` ist standardmäßig 4100 K (Mondlicht). `height` ist relativ zum Horizont statt absolut angegeben, damit ein Mondaufgang auch beim automatischen Horizont knapp über der Kante bleibt.
+  - `skyDepth`: Tiefe, ab der zusätzlich Himmel gilt. Werte > 1 erfassen bei normierter Tiefe nur die ungültige Tiefe (Standard 2).
+  - `edge`: halbe Breite des Kantenbands in Bildbreiten (0 = harte Tiefenmaske, Standard 0,004).
+  - `spill` (0…1): dezente Färbung der Szene mit der mittleren Himmelsfarbe, an der Himmelskante am stärksten.
+- Referenzmathematik:
+  1. Rohmaske `R = 1`, wo `d` nicht endlich ist oder `d ≥ skyDepth`, sonst 0.
+  2. Matte: Mit `b = round(edge · W)` px liegt das Band zwischen Dilatation und Erosion von `R` (quadratisch, Radius `b`). Außerhalb des Bands gilt `α = R`. Im Band ist `S` der lokale alte Himmel (maskierter Gauß-Mittelwert von `in · erode(R)`, σ = 2b) und `F` der lokale Vordergrund (dasselbe mit `1 − dilate(R)`). Dann gilt `a = clamp(⟨in − F, S − F⟩ / |S − F|²)` und `α = conf · smoothstep(0,1; 0,7; a) + (1 − conf) · gauss(R, b/2)` mit `conf = smoothstep(0,005; 0,03; |S − F|² / (Y(S)² + Y(F)² + 10⁻⁶))`.
+  3. Komposit: `out = (1 − α) · F′ + α · sky`. Für 0 < α < 1 ist `F′ = (in − α · S) / (1 − α)` (alter Himmelsanteil herausgerechnet), je Kanal begrenzt auf das Intervall zwischen `in` und `F`. Für α = 0 gilt `out = in` bitgleich.
+  4. Prozeduraler Himmel, je Pixel mit `u = (x + 0,5)/W`, `v = (y + 0,5)/W` und `base = 0,18 · 2^exposure`: `sky = mix(zenith, horizon, clamp(v/horizonY)^gradientPower) · base`, dazu `glow · glowColor · base · e^(−(horizonY − v)/0,06)`. Wolken: fBm aus 5 Oktaven Value-Noise (Integer-Hash, quintische Interpolation) mit Domain-Warp auf dem Gitter `X = (u − 0,5) · 0,6/cloudScale`, `Z = 0,24 · √(1/(horizonY − v + 0,12))/cloudScale`, Schwelle `smoothstep(1 − clouds ∓ w)` mit `w = 0,03 + 0,35 · (1 − cloudContrast)`. Sterne: festes Gitter mit der Zellgröße 1/512 Bildbreite; Stern, wenn `hash(i, j, 1) < 0,06 · stars · (1 + 6 · Milchstraßenband)`; Position und Helligkeit aus weiteren Hashes; Gauß-Fleck mit σ = max(0,0003 · W, 0,6) px und konstantem Fluss. Milchstraße, Polarlicht (zwei Vorhänge, grün unten, violett oben) und Mond (Scheibe mit Halo) sind ebenfalls feste Formeln dieser Knotenversion. Alles ist lineares Licht. Es gibt keine Zufallszahlen; das Muster hängt nur von normierten Koordinaten ab (§7).
+  5. `source: "image"`: PNG als sRGB dekodiert und in den Arbeitsraum gewandelt, mit „Füllen“ eingepasst, mal `2^exposure`.
+  6. `spill`: `in · (1 + k · (T − 1))` mit `T` = maskengewichteter Mittelwert des neuen Himmels auf Luminanz 1 normiert und `k = spill · (0,35 + 0,65 · clamp(2 · gauss(R, 0,08 W)))`.
+- Grenzen: Ein schmaler Kantenhalo bleibt möglich, vor allem wo die Tiefe die Kante grob trifft oder Himmel und Vordergrund ähnliche Farben haben (Dunst am Horizont). Haare, Äste und Laub vor dem Himmel werden nur so gut wie die Tiefe und das Farbband erfassen. Spiegelungen des Himmels, etwa im Wasser, werden **nicht** ersetzt. Das Licht der Szene ändert sich nicht von selbst: Sonne und Schatten bleiben. Für eine glaubwürdige Tageszeit braucht es deshalb Grade, Belichtung und Relight.
+- Editor-Funktion, nicht Teil des Formats: Der Text-Prompt erkennt Tageszeiten und Himmel auf Deutsch und Englisch (z. B. „Nacht“, „Sonnenuntergang“, „blaue Stunde“, „bewölkt“, „Sternenhimmel“, „Sandsturm“, „Gewitterhimmel“, „Polarlicht“, „Mondaufgang“, „Neon-Nacht“). Er schreibt daraus gewöhnliche Knoten, und zwar dieselben wie der Tageszeit-Schalter (§5.7): `sky.replace@1` mit Vorlage, bei dunklen Himmeln eine Belichtung als `color.cdl@1` im linearen Raum (Day-for-Night etwa −1,8 EV, kühl), eine eigene Grade-Verschiebung als `color.look@1` vor einem genannten Film-Look (dessen Tönung behält Vorrang, die Tageszeit wirkt dann mit 60 %) und gegebenenfalls Mondlicht oder tiefe Sonne als `light.relight@1`. Die Reihenfolge folgt den Ebenen (§5.6): Belichtung → Relight → Lampen → Himmel → Nebel → Tiefenschärfe → Vignette → Halation → Korn → Display → Grade → Look. Der Himmel liegt vor dem Nebel, damit Dunst auch über dem neuen Himmel liegt.
+
+#### 5.3.5 `light.practicals@1` – Lampen im Bild leuchten lassen und umfärben
+
+- Eingänge: `image` (linear), optional `depth`, `normals` und `mask`. `mask` und `amount` wirken wie bei jedem Bildknoten nach dem Knoten.
+- Parameter:
+  - Erkennung: `threshold` (lineare Luminanz), `softness` (EV-Breite der Schwelle), `contrast` (EV über dem Gauß-Umfeld mit σ = `maxSize`), `minSize` und `maxSize` (Bildbreiten).
+  - Leuchten: `intensity` (EV), `glow` und `glowRadius` (Bildbreiten), `throw` (Reichweite in Bildbreiten), `falloff` (0…3).
+  - Farbe: `color` (linear oder Kelvin), `recolor` (0 = Originalfarbe, 1 = Zielfarbe).
+  - `points` (optional, höchstens 8): `{x, y, radius, intensity, color?}` in normierten Koordinaten für Lampen, die die Erkennung nicht findet.
+- Referenzmathematik:
+  1. `c₀ = smoothstep(thr · 2^−softness, thr · 2^softness, Y) · smoothstep(2^(contrast−0,5), 2^(contrast+0,5), Y / gauss(Y, maxSize · W))`.
+  2. `m = clamp(open(c₀, round(minSize · W)) − open(c₀, round(maxSize · W)))`, mit Graustufen-Öffnung (Erosion, dann Dilatation) mit einem Quadrat. Das Ergebnis enthält nur Strukturen zwischen Mindest- und Höchstgröße.
+  3. Umfärben bei gleicher Luminanz: `rc = in + recolor · (Y · T/Y(T) − in)`. Bild: `in + m · (rc − in) + m · rc · g` mit `g = 2^intensity − 1`. Emission `E = m · rc` plus Punkte (weiche Scheibe in Punktfarbe, `0,18 · 2^intensity` je Punkt).
+  4. Glühen: `g · glow · Σ wₖ · gauss(E, glowRadius · {0,5; 1; 2} · W)` mit `w = {0,5; 0,3; 0,2}`.
+  5. Raumlicht: `room = Σ ŵₖ · gauss(E, σₖ) · 2π(σₖ/W)²/4·10⁻⁴` mit `σₖ = throw · {0,25; 0,5; 1} · W` und `ŵₖ ∝ 2^(−2 · falloff · k)`. Addiert wird `in · room · g / gauss(Y, 0,02 W)` (Albedo-Schätzung wie §5.3.3). Mit `depth` wird zusätzlich mit `exp(−((d − D_src)/0,25)²)` gewichtet; dabei ist `D_src` die emissionsgewichtete Quelltiefe. Mit `normals` wird gewichtet mit `max(0, (n · L + 0,5)/1,5)`; `L` zeigt entlang des Bildgradienten von `room` zur Quelle.
+  6. Große Gauß-Radien dürfen über Verkleinern (Box), Gauß und bilineare Vergrößerung angenähert werden; diese Annäherung gehört zur Knotenversion.
+- Grenzen: Die Erkennung ist heuristisch. Fenster, Himmel, Spitzlichter oder weiße Wände können fälschlich als Lampe gelten; dagegen helfen Schwelle, Kontrast oder eine Maske. Eine im Bild unbeleuchtete Lampe wird nicht gefunden; dafür gibt es `points`. Es gibt keinen echten Lichttransport, keine Verdeckung und keine neuen Schatten. Das Raumlicht ist ein Screen-Space-Effekt. Bei display-bezogenem Eingang sind Lampen meist bei 1,0 abgeschnitten, ihre wahre Helligkeit ist also unbekannt.
+- Editor-Funktion: Der Prompt erkennt „Lampen an/leuchten“, „Lichter an“, „Praktikabel“, „Kerzenlicht“, „Neonlicht“, „Lampen in Rot/Blau/Türkis …“, „lamps on“, „practical lights“ (Chip z. B. „Lampen leuchten · warm 2700 K“). Nach einer Nacht-Belichtung folgt `threshold` ihr, damit dieselben Lampen gefunden werden.
+
+#### 5.3.6 `lens.vignette@1` – Randabfall
+
+- Eingänge: `image` (linear), optional `mask`. `mask` und `amount` mischt der Renderer nach dem Knoten.
+- Parameter (Längen in Bildbreiten, §4.4):
+  - Genau eines von `strength` (−1…1, Faktor) oder `exposure` (−8…4 EV). Ein Reader MUSS eine Datei mit beiden oder keinem der beiden ablehnen.
+  - `radius` (0…2): Abstand von der Mitte, ab dem der Abfall beginnt.
+  - `softness` (0…2): Breite des Übergangs. 0 ist eine harte Kante.
+  - `roundness` (0…1): 0 folgt dem Bildformat (Ellipse, die die Bildränder gleich trifft), 1 ist ein Kreis.
+  - `center` (optional, `[x, y]` in normierten Koordinaten §4.4): fehlt der Wert, gilt die Bildmitte `[0,5; H/(2W)]`.
+- Referenzmathematik je Pixel mit `u = (x + 0,5)/W`, `v = (y + 0,5)/W`:
+  `k = 1 + (W/H − 1) · (1 − roundness)`; `d = hypot(u − cx, (v − cy) · k)`; `f = smoothstep(radius, radius + softness, d)`;
+  `gain = 1 − strength · f` (nie negativ) bzw. `gain = 2^(exposure · f)`; `out = in · gain`, Alpha unverändert.
+- Grenzen: Ein parametrischer Abfall, kein Objektivmodell. Das natürliche cos⁴-Gesetz, mechanische Vignettierung oder Farbsäume am Rand bildet der Knoten nicht nach. Negative `strength` hellt die Ränder auf. Wirkt der Knoten nach dem Nebel, dunkelt er auch den Nebel ab, wie es ein Objektiv tut.
+- Editor-Funktion: „Vignette“, „Vignettierung“, „Randabdunklung“, „dunkle Ecken“, „vignetting“, „dark corners“ ergeben `exposure: −1` EV (leicht −0,5, stark −1,8), „rund“ setzt `roundness: 1`, „weich“/„hart“ die Übergangsbreite.
+
+#### 5.3.7 `film.grain@1` – Filmkorn
+
+- Eingänge: `image` (linear), optional `mask`.
+- Parameter:
+  - `size` (0,0002…0,01): Zellgröße des Korngitters in Bildbreiten. 0,0007 entspricht etwa 1,3 px bei 1920 px Breite (35-mm-Anmutung).
+  - `intensity` (0…2): Stärke als Standardabweichung in EV bei voller Tongewichtung. 0,08 EV entspricht in den Mitten etwa 2,3 % des Display-Codewerts.
+  - `response` (0…1): Luminanzabhängigkeit. 0 = überall gleich stark, 1 = Tongewicht des Boolean-Modells (unten).
+  - `chroma` (0…1): 0 = monochromes Korn (alle Kanäle gleich), 1 = unabhängiges Korn je Kanal.
+  - `seed` (ganze Zahl 0…65535): wählt ein anderes Muster, z. B. je Shot.
+  - `animate` (Wahrheitswert): `true` = Korn ändert sich mit jedem Frame, `false` = stehendes Korn.
+- Hintergrund: Newson et al. modellieren Filmkorn als Boolean-Modell, also als Vereinigung zufällig platzierter Scheiben (Silberkörner), deren Dichte so gewählt ist, dass die erwartete Bedeckung dem Grauwert entspricht. Gerendert wird mit Monte-Carlo-Integration und einem Gauß-Filter; das Ergebnis ist auflösungsunabhängig ([Realistic Film Grain Rendering, IPOL 7 (2017), S. 165–183, DOI 10.5201/ipol.2017.192](https://www.ipol.im/pub/art/2017/192/article_lr.pdf)). Daraus übernimmt `@1` zwei Eigenschaften: Die Varianz der Bedeckung eines Boolean-Modells ist `u · (1 − u)`, also null bei Schwarz und Weiß und am größten in den Mitten. Außerdem hängt das Muster an Bildkoordinaten und nicht an Pixeln. Die Monte-Carlo-Simulation einzelner Körner übernimmt `@1` nicht: Sie ist teuer und braucht Zufallszahlen. Stattdessen nutzt `@1` gauß-gefiltertes weißes Rauschen auf einem festen Gitter.
+- Referenzmathematik:
+  1. Gitterwerte: `g(i, j, s) = 2 · (h(i, j, s) + h(i, j, s + 1) + h(i, j, s + 2) − 1,5)` mit dem Integer-Hash `h` aus §5.3.4 (murmur3-Finalizer). Das ist eine Irwin-Hall-Näherung einer Normalverteilung mit Varianz 1.
+  2. Seed je Feld: `s = (imul(seed ⊕ 0x5bd1e995, 0x27d4eb2d) ⊕ imul(⌊frame⌋, 0x165667b1) ⊕ imul(k + 1, 0x9e3779b1))` mit `k` = Kanal 0–2 bzw. 3 für das monochrome Feld und `frame = 0` bei `animate: false`. `frame` ist die Frame-Nummer des Renders (§9.3). Gleiche Frame-Nummer bedeutet gleiches Korn, auch bei getrennten Renderinstanzen.
+  3. Feld: Zelle `(i, j)` deckt `[i, i+1) · size × [j, j+1) · size` in Bildbreiten und trägt den Wert `g(i, j, s)`. Jeder Pixel erhält den flächengewichteten Mittelwert der Zellen, die er überdeckt (exakt, getrennt nach x und y). Danach folgt ein Gauß-Filter mit `σ = 0,5 · size · W` px, wie bei Newson et al. ein einzelner Gauß-Filter. Das Ergebnis wird mit `1/0,48606` multipliziert: Für `σ = 0,5` Zellen ist der mittlere Wert von `Σᵢ (Φ((i+1−x)/σ) − Φ((i−x)/σ))²` über eine Zelle 0,48606 pro Achse; so hat das kontinuierliche Feld den Effektivwert 1. Sind Zellen kleiner als ein Pixel, mitteln sie sich im Pixel heraus. Ein Proxy-Render zeigt dadurch dasselbe Muster verkleinert, mit kleinerer Streuung pro Pixel, wie ein verkleinerter Filmscan.
+  4. Farbe: `G_c = ((1 − chroma) · G_mono + chroma · G_c,unabhängig) / hypot(1 − chroma, chroma)`; bei `chroma = 0` gilt `G_c = G_mono`.
+  5. Tongewicht: `t = clamp(Y(in))^(1/2,4)` (display-ähnlicher Ton), `u = t^0,7`, `w = 2 · √(u · (1 − u))`, `w' = 1 + response · (w − 1)`. Der Exponent 0,7 verschiebt das Maximum der Boolean-Varianz von `t = 0,5` nach `t ≈ 0,37`, also in Richtung Schatten. Das ist eine redaktionelle Entscheidung.
+  6. `out_c = in_c · 2^(intensity · w' · G_c)`. Alpha bleibt unverändert, Schwarz bleibt Schwarz.
+- Grenzen: Ein statistisches Ersatzmodell, kein Kornsimulator. Es gibt keine einzelnen Körner, keine log-normale Korngrößenverteilung und keine Abhängigkeit von Filmmaterial oder Entwicklung. Auf display-bezogenem SDR-Material wirkt `t` wie der Codewert, auf Szenenlicht über 1 entsteht kein Korn. Das quadratische Zellraster ist nach dem Gauß-Filter nur noch schwach zu ahnen; bei starker Vergrößerung kann es sichtbar werden. Komprimierte Ausgabe (H.264/HEVC) glättet Korn stark; das gehört nicht zum Format.
+- Editor-Funktion: „Filmkorn“, „Korn“, „körnig“, „film grain“, „grainy“. Ein Filmformat wählt Größe und Stärke (redaktionell): Super 8 0,0022/0,22 EV, 16 mm 0,0013/0,14 EV, 35 mm 0,0007/0,08 EV (Standard), 65/70 mm und IMAX 0,0004/0,05 EV. „fein“/„grob“ skalieren die Größe (×0,75/×1,4), „leicht“/„stark“ die Stärke (×0,6/×1,6); `chroma` ist 0,2, „monochrom“ setzt 0, „farbig“ 0,7. Beispiel: „Kodak-Look mit Korn“ ergibt den Look plus Korn davor.
+
+#### 5.3.8 `film.halation@1` – Halation und Bloom
+
+- Eingänge: `image` (linear), optional `mask`.
+- Hintergrund: Bei Farbnegativfilm durchdringt helles Licht die Emulsion, wird an der Rückseite des Trägers reflektiert und belichtet von hinten vor allem die rotempfindliche Schicht nach. Um Spitzlichter entsteht dadurch ein rötlich-oranger Hof ([Halation, Wikipedia](https://en.wikipedia.org/wiki/Halation)). Bloom ist hier das allgemeine, farbneutrale Überstrahlen heller Stellen.
+- Parameter:
+  - `threshold` (0,01…16): lineare Luminanz, ab der ein Pixel als Spitzlicht zählt.
+  - `knee` (0…6 EV): Breite des weichen Übergangs um die Schwelle.
+  - `radius` (0…0,1): Größe des Hofs in Bildbreiten.
+  - `intensity` (0…4): Stärke des Hofs.
+  - `color`: Farbe des Hofs (linear oder Kelvin), auf Luminanz 1 normiert.
+  - `bloom` (0…2): Anteil des neutralen Bloom, 0 = aus.
+  - `bloomRadius` (optional, 0…0,1): Radius des Bloom; fehlt der Wert, gilt `radius`.
+- Referenzmathematik:
+  1. `k = smoothstep(−knee/2, knee/2, log₂(Y/threshold))` (0 für `Y ≤ 0`; 0,5 genau an der Schwelle).
+  2. `B(E, r) = Σ wₖ · gauss(E, r · {0,5; 1; 2} · W)` mit `w = {0,25; 0,5; 0,25}`, große Radien wie in §5.3.5 über Verkleinern, Gauß und Vergrößern (`gaussianBlurWide` der Referenz).
+  3. `E = Y · k`; `out = in + intensity · ĉ · max(0, B(E, radius) − E) + bloom · B(in · k, bloomRadius)`, mit `ĉ = color / Y(color)`. Alpha bleibt. Der Hof zählt nur das Licht, das über seine Quelle hinaus streut: Innerhalb einer gleichmäßig hellen Fläche ist `B(E) ≈ E`, dort entsteht kein Hof, an ihren Rändern und um kleine Spitzlichter schon. Das ist eine bewusste Abweichung von der reinen Streuung: Auf SDR-Material liegen Wolken und weiße Wände nahe der Schwelle und würden sonst rosa überzogen.
+- Grenzen: Additiv und ohne Energieerhaltung: Der Hof nimmt dem Spitzlicht kein Licht weg. Der Bloom wirkt dagegen auch im Inneren heller Flächen und kann sie bei hohen Werten aufhellen. Auf display-bezogenem Material sind Spitzlichter bei 1,0 beschnitten; ihre wahre Helligkeit ist unbekannt, daher ist die Schwelle dort ein Gestaltungswert. Physikalisch hängt Halation von Material, Belichtung und Lichthofschutzschicht ab; `@1` bildet das nicht nach.
+- Editor-Funktion: „Halation“, „Lichthof“, „Halo“ ergeben einen roten Hof (`intensity` 0,6, Radius 0,006); „Bloom“, „Glow“, „Glühen“, „Überstrahlen“ einen neutralen Bloom (`bloom` 0,3, `bloomRadius` 0,012). „Lampen glühen“ bleibt `light.practicals@1`.
 
 ### 5.4 Masken (`scalar`-Ausgang)
 
@@ -292,6 +394,31 @@ Jede Maske wird auf 0…1 geklemmt. `feather` nutzt immer `smoothstep`, wie `smo
 ### 5.5 Engine-Bindung des Farblooks
 
 `color.look@1` ist an eine konkrete Formel gebunden. Damit ein Host ohne eigene Implementierung arbeiten kann, SOLL der Writer `bakedLut` (64³, wie der heutige Standardexport) mitliefern. Kennt ein Host `color.look@1` nicht, DARF er `bakedLut` verwenden, MUSS das aber anzeigen. Als Pflichtknoten ohne `bakedLut` führt er sonst zur Renderverweigerung (§4.2).
+
+### 5.6 Ebenen der Bildkette (Editor)
+
+Die Knoten folgen dem Weg des Lichts. Der Editor gruppiert die Bildkette sichtbar in vier Ebenen. Die Ebenen sind eine Editor-Konvention und **nicht Teil des Formats**: Ein Reader wertet weiterhin nur den Graphen aus (§4.3), und eine Datei darf ihre Knoten in jeder gültigen Reihenfolge enthalten.
+
+| Ebene | Knoten | Raum | Umgesetzt |
+|---|---|---|---|
+| **Licht** | `color.cdl@1` im linearen Raum (Szenenbelichtung), `light.relight@1`, `light.practicals@1` | linear | ja |
+| **Atmosphäre** | `sky.replace@1`, `atmos.fog@1` | linear | ja |
+| **Optik** | `lens.dof@1`, `lens.vignette@1`, `film.halation@1`, `film.grain@1` | linear | ja; chromatische Aberration, Linsenverzeichnung und Lens Flares noch nicht |
+| **Grade** | `color.look@1`, `color.cdl@1` im Display-Raum, `color.lut3d@1` | display | ja |
+
+- Konvertierungen (`color.convert@1`) und unbekannte optionale Knoten haben keine eigene Ebene. Der Editor zeigt sie bei der nächsten Ebene, die folgt. Masken stehen getrennt.
+- **Hinzufügen:** Ein neuer Knoten kommt ans Ende seiner Ebene. Innerhalb der Optik gilt Objektiv vor Film (Tiefenschärfe → Vignette → Halation → Korn), im Licht Belichtung → Relight → Lampen, in der Atmosphäre Himmel → Nebel. Eine Konvertierung direkt davor wird übersprungen, wenn ihr Ausgangsraum nicht der Raum des neuen Knotens ist; ein linearer Knoten landet so vor der Display-Konvertierung des Grades. Ist ein Knoten derselben Ebene ausgewählt, kommt der neue direkt dahinter.
+- **Bestehende Dateien** werden nicht umsortiert. Weicht ihre Reihenfolge von Licht → Atmosphäre → Optik → Grade ab, zeigt der Editor die Abschnitte in Dateireihenfolge und kennzeichnet Abschnitte, die hinter einer späteren Ebene stehen.
+- Begründung der Reihenfolge: Korn und Halation entstehen im Negativ, also vor der Lichtbestimmung; der Grade wirkt deshalb auch auf das Korn. Ein Grade vor dem Korn ist möglich (Datei-Reihenfolge), gilt aber als Abweichung.
+
+### 5.7 Tageszeit-Schalter (Editor)
+
+Oben in der Knotenliste wählt der Nutzer eine Tageszeit: „Wie aufgenommen“, „Goldene Stunde“, „Mittag“ (Vorlage `clear-day`), „Blaue Stunde“, „Zwielicht“, „Nacht“, „Sternenhimmel“, „Mondaufgang“, „Bewölkt“, „Gewitter“, „Sandsturm“, „Polarlicht“ oder „Neon-Nacht“. Der Schalter ist eine Editor-Funktion (`applyTimeOfDay` in `src/buck/prompt.ts`; der Text-Prompt nutzt dieselbe Funktion). Sein Ergebnis sind gewöhnliche Knoten; die Spezifikation bleibt unverändert.
+
+- Er erzeugt je nach Vorlage: `tod-exposure` (Szenenbelichtung, `color.cdl@1` linear, Anfang der Ebene Licht), `tod-light` mit Maske `tod-lightMask` (Mondlicht bzw. tiefe Sonne, nur wenn der Graph kein eigenes Relight hat), `tod-sky` (`sky.replace@1`, Anfang der Atmosphäre), `tod-haze` (Staub beim Sandsturm, wenn kein Nebel da ist) und `tod-grade` (`color.look@1`, Anfang des Grades, vor einem vorhandenen Look; mit vorhandenem Look wirkt die Tönung mit 60 %).
+- **Kennzeichnung:** Die Knoten-IDs beginnen mit `tod-`. Dieses Präfix ist für den Schalter reserviert. Vorhandene Knoten, die er anpasst, behalten die ersetzten Werte im Herstellerfeld `x-buckswood-tod` (§4.2), z. B. `{"params": {"luminance": 1.6}, "label": "Nebel im Hintergrund"}`; `null` steht für „Feld fehlte“. Angepasst werden die Nebelhelligkeit (und die Nebelfarbe, wenn sie noch der Standardfarbe entspricht), die Schwelle von `light.practicals@1` nach einer Szenenbelichtung und ein vorhandenes `sky.replace@1` (Vorlagenwerte; Quelle, Datei, Horizont, Tiefenschwelle und Kante bleiben).
+- **Wechsel und Rücknahme:** Jede Wahl entfernt zuerst die Spuren der vorigen (alle `tod-`-Knoten, Rückschreiben aus `x-buckswood-tod`) und setzt dann die neue Vorlage. Vorlagen stapeln sich also nicht. „Wie aufgenommen“ entfernt nur. Werte, die der Nutzer nach dem Schalten an angepassten Feldern geändert hat, werden dabei auf den Stand vor dem Schalter zurückgesetzt; andere Felder bleiben.
+- Ein Look, dessen Bildknoten keine einfache Kette bilden, lässt sich nicht schalten; der Editor meldet das.
 
 ---
 
@@ -389,9 +516,9 @@ Die Werte sind Vorschläge, die mit der Referenz in Phase 2 kalibriert werden:
 
 | Klasse | Knoten | Bedingung | Toleranz gegenüber der Referenz (Ausgabe im Ausgangsraum, 0…1) |
 |---|---|---|---|
-| **A** | `color.look`, `color.cdl`, `color.convert`, Masken ohne Blur | gleiche Eingabe | max. abs. ≤ 1e-5 (CPU), ≤ 1e-4 (GPU, float32) |
+| **A** | `color.look`, `color.cdl`, `color.convert`, `lens.vignette`, Masken ohne Blur | gleiche Eingabe | max. abs. ≤ 1e-5 (CPU), ≤ 1e-4 (GPU, float32) |
 | **A'** | `color.look` über `bakedLut` (64³ tetraedrisch) | gleiche Eingabe | max. abs. ≤ 2/1023 (10 Bit), mittlere ≤ 1e-4 |
-| **B** | `atmos.fog`, `lens.dof`, `light.relight`, `mask.refine` | **identische Hilfskanäle** | 99,9-Perzentil ≤ 1/1023, max. ≤ 4/1023; keine NaN/Inf |
+| **B** | `atmos.fog`, `lens.dof`, `light.relight`, `sky.replace`, `light.practicals`, `film.grain`, `film.halation`, `mask.refine` | **identische Hilfskanäle** (Korn: gleiche Frame-Nummer) | 99,9-Perzentil ≤ 1/1023, max. ≤ 4/1023; keine NaN/Inf |
 | **C** | jede Kette mit `estimate`-Quelle | gleiches Modell, anderes Backend | keine Pixelgarantie; Plausibilitätstest (Rangkorrelation der Tiefe ≥ 0,99 gegen Referenz-CPU-Inferenz) |
 
 ### 7.3 Was Determinismus hier bedeutet
@@ -416,7 +543,7 @@ Die Werte sind Vorschläge, die mit der Referenz in Phase 2 kalibriert werden:
   }
   ```
 - **Arbeitsräume pro Knotentyp:**
-  - Physikalisch motivierte Knoten (`atmos.fog`, `lens.dof`, `light.relight`) MÜSSEN linear arbeiten. Nebel und Bokeh in Gamma-Werten sehen sichtbar falsch aus, vor allem bei hellen Lichtpunkten.
+  - Physikalisch motivierte Knoten (`atmos.fog`, `lens.dof`, `light.relight`, `sky.replace`, `light.practicals`, `lens.vignette`, `film.grain`, `film.halation`) MÜSSEN linear arbeiten. Nebel und Bokeh in Gamma-Werten sehen sichtbar falsch aus, vor allem bei hellen Lichtpunkten.
   - `color.look@1` arbeitet display-bezogen, wie die heutige Engine.
   - Der Writer setzt `color.convert`-Knoten explizit. Ein Reader fügt nie selbst Konvertierungen ein.
 - **Display-Eingang als „linear“:** Wenn das Host-Bild display-bezogen ist (heutiger SDR-Fall), ergibt die inverse EOTF nur *linearisiertes Display-Licht*, keine echte Szenenlinearität. Hellste Lichter sind dann bereits beschnitten. Das ist für Version 1 akzeptiert und im Editor sichtbar zu kennzeichnen. Für Log- und Kameramaterial SOLL der Eingang ein Szenenraum sein, z. B. `ACEScg` nach Host-IDT.
@@ -444,6 +571,7 @@ Die Werte sind Vorschläge, die mit der Referenz in Phase 2 kalibriert werden:
 - Optional KANN der Analyse-Durchlauf eine bewegungskompensierte zeitliche Glättung anwenden: `stabilize: {"method": "flow-ema@1", "strength": …}`. Sie ist Teil des Cache-Schlüssels. Im Render ist sie verboten.
 - Masken nutzen immer `feather` > 0. `mask.depthRange` verlangt ein Mindest-`feather` von 0,02 Tiefeneinheiten.
 - Für DOF gelten feste Abtastmuster (§5.3.2). Fokusfahrten erfolgen über Keyframes, nicht über automatische Fokusverfolgung.
+- Filmkorn (§5.3.7) ändert sich nur über die Frame-Nummer des Renders, nicht über einen Zustand. Zwei Renderinstanzen, die denselben Frame rechnen, liefern dasselbe Korn.
 
 ### 9.3 Animation
 
@@ -683,6 +811,17 @@ Hinweise zum Beispiel:
 
 ## 14. Roadmap
 
+### 14.0 Umsetzungsstand (Referenz-Prototyp, 31.10.2026)
+
+Der Prototyp unter `src/buck/` ist eine TypeScript-Referenz im Browser und in Node. Er ist nicht die normative C++-Referenz aus §7.1.
+
+- **Phase 1:** Spezifikation und JSON-Schema (`docs/schema/buck-1.0.schema.json`) liegen vor. Der strenge Reader `src/buck/validate.ts` prüft die semantischen Regeln. Offen sind die Formeln mit Funktionsgenauigkeiten pro Knoten und der 1.0-rc.
+- **Phase 2, umgesetzt:** Lesen und Schreiben im Speicher (`container.ts`) mit den Grenzen aus §11, Tiefenschätzung über ONNX Runtime Web (WebGPU, sonst WASM) mit Depth Anything V2 Small (`da2-small-rel@1`; für Video Depth Anything gibt es keinen offiziellen ONNX-Export), Analyse-Cache in IndexedDB mit `.buckaux`-Export (EXR), alle Knoten aus §5 als TypeScript-Referenz (`render.ts`, `nodes/*`), Fallback-Cube, Keyframes, Editor mit Ebenen (§5.6) und Tageszeit-Schalter (§5.7). Vitest-Tests in `tests/buck-*.test.ts`.
+- **Phase 2, offen:** WGSL-Vorschau, Kalibrierung der Toleranzklassen, Messung der Performance-Ziele (§10) auf benannter Hardware, Flackermessung nach §9.4.
+- **Phase 4, teilweise:** `normals-from-depth@1`, `light.relight@1` (Modus `add`) mit optionalem Hautschutz (§5.3.3) und `light.practicals@1` gibt es im Web; Modus `reshape`, gelernte Normalen und die Prüfung durch einen Coloristen fehlen.
+- **Optik (neu, §5.3.6–§5.3.8):** `lens.vignette@1`, `film.grain@1` und `film.halation@1` gibt es im Web und im Prompt („Filmkorn“, „35mm-Korn“, „Vignette“, „Halation“, „Bloom“, „Glow“). Chromatische Aberration, Verzeichnung, Flares und anamorphotische Effekte fehlen.
+- **Phase 3** (OFX, C++-Referenz) hat noch nicht begonnen.
+
 ### Phase 1 – Spezifikation (dieses Dokument)
 
 - Konzept, Container, Graph, Knoten, Eingaben, Determinismus, Farbmanagement, Sicherheit.
@@ -709,7 +848,7 @@ Hinweise zum Beispiel:
 ### Phase 4 – Relight
 
 - `normals-from-depth@1` und `light.relight@1` in Referenz, Web und OFX.
-- Untersuchung, ob gelernte Normalen (Marigold, DSINE o. a.) lizenzrechtlich und zeitlich tragfähig sind. Ein mögliches `skinProtect` für Relight und der Modus `reshape`.
+- Untersuchung, ob gelernte Normalen (Marigold, DSINE o. a.) lizenzrechtlich und zeitlich tragfähig sind. Der Modus `reshape`. (`skinProtect` für Relight ist seit 31.10.2026 als optionales Feld spezifiziert, §5.3.3.)
 - **Ausgang:** Beispiel §13 vollständig in allen drei Hosts. Sichtprüfung an Porträt, Innenraum und Außen durch einen Coloristen, mit dokumentierten Grenzfällen (Haare, Brillen, Gegenlicht).
 
 ---
@@ -723,7 +862,7 @@ Hinweise zum Beispiel:
 5. **Shot-Grenzen:** Wer bestimmt sie für die Shot-Normierung? Hostmetadaten, Schnittliste (EDL/AAF) oder Schnitterkennung im Editor?
 6. **Toleranzen:** Sind die Werte aus §7.2 für Coloristen ausreichend streng, vor allem in dunklen Bereichen nach späteren Kontrasterhöhungen? Kalibrierung in Phase 2.
 7. **Echte Szenenlinearität:** Wie viel ist Nebel/Relight auf display-bezogenem SDR-Material wert? Wird für Version 1 ein Szenenraum-Eingang (Log/ACES) Pflicht für räumliche Knoten?
-8. **Relight-Physik:** Reicht die Albedo-Heuristik? Braucht Version 1 Haut-Schutz und eine Begrenzung für Spitzlichter? Sind Screen-Space-Schatten aus der Tiefe sinnvoll oder zu artefaktanfällig?
+8. **Relight-Physik:** Reicht die Albedo-Heuristik? Sind Screen-Space-Schatten aus der Tiefe sinnvoll oder zu artefaktanfällig? Teilweise beantwortet: Relight hat einen optionalen Hautschutz über den Farbschlüssel des Looks (§5.3.3), die Spitzlichtbegrenzung ist `preserveHighlights`. Offen bleibt, ob ein Farbschlüssel genügt oder eine Hautmaske des Hosts (`mask.input`) der empfohlene Weg ist.
 9. **Metrische Tiefe:** Lohnt sich `lens.dof` im Modus `physical` ohne lizenzklares metrisches Videomodell? Die Lizenz der metrischen Video-Depth-Anything-Varianten ist ungeklärt; Depth Pro hat eine Apple-eigene Lizenz.
 10. **Modellverteilung:** Wie werden Modellgewichte ausgeliefert und aktualisiert (im DMG/PKG, separater Download mit Hash, Größe), und wie verhält sich das mit Apache-2.0-Hinweispflichten?
 11. **Signaturen:** Braucht Version 1 eine Herkunftssignatur (z. B. Ed25519) für Studios, die nur geprüfte Looks zulassen? Wer verwaltet die Schlüssel?
@@ -731,3 +870,6 @@ Hinweise zum Beispiel:
 13. **Masken aus dem Host:** Sollen Resolve-Power-Windows oder Magic Mask über `mask.input` eingebunden werden, und mit welchem Kanal- und Farbraumvertrag?
 14. **Exportziele:** Welche Priorität haben CLF-, DCTL- und Gizmo-Exporte gegenüber dem eigenen OFX-Effekt? DCTL-Texturzugriff für Tiefe in Resolve ist nicht geprüft.
 15. **Lizenz der Spezifikation:** Bleibt das Format proprietär oder wird die Spezifikation offen veröffentlicht, als Voraussetzung für Verbreitung über Buckswood hinaus?
+16. **Korn und Ausgaberaum:** Gehört Filmkorn vor den Grade (wie im Negativ, §5.6) oder ans Ende der Kette, damit es nach Kontrast und Kompression sichtbar bleibt? Soll `film.grain` eine Option für display-bezogenes Korn bekommen (dann eine neue Knotenversion)?
+17. **Korn bei Proxy-Renders:** Das Muster ist an Bildbreiten gebunden; im Proxy sinkt deshalb die Streuung pro Pixel. Ist das gewünscht (Verhalten eines verkleinerten Scans), oder soll ein Host im Proxy das Erscheinungsbild der Vollauflösung nachbilden?
+18. **Herstellerfeld des Tageszeit-Schalters:** Reicht `x-buckswood-tod` (§5.7) als Rücknahmeinformation, oder sollte das Format ein allgemeines Feld für „vom Werkzeug erzeugt/angepasst“ bekommen, damit auch andere Hosts solche Knoten erkennen?

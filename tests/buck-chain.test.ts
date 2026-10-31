@@ -76,13 +76,14 @@ describe('addNode',()=>{
   });
   it('shares one conversion between adjacent linear nodes',()=>{
     let g=addNode(base(),'atmos.fog@1').graph;g=addNode(g,'lens.dof@1').graph;g=valid(addNode(g,'light.relight@1').graph);
-    expect(ids(g)).toEqual(['auto-to-acescg','fog','dof','relight','auto-to-rec-1886-rec-709-display']);
+    // Relight belongs to the light level and goes before fog (atmosphere) and DOF (optics).
+    expect(ids(g)).toEqual(['auto-to-acescg','relight','fog','dof','auto-to-rec-1886-rec-709-display']);
     expect(Object.keys(g.inputs).sort()).toEqual(['depth','normals']);
     expect(g.inputs.normals.sources[2]).toEqual({type:'derive',method:'normals-from-depth@1',from:'depth',params:{smoothing:.002}});
   });
-  it('inserts before the last look by default and after afterId when given',()=>{
+  it('inserts at the end of the node level (before the display conversion of the grade) and after afterId of the same level',()=>{
     const fx=fixture(),a=valid(addNode(fx,'lens.dof@1').graph);
-    expect(ids(a)).toEqual(['toLinear','warmKey','fog','toDisplay','auto-to-acescg','dof','auto-to-rec-1886-rec-709-display','fargo']);
+    expect(ids(a)).toEqual(['toLinear','warmKey','fog','dof','toDisplay','fargo']);
     const b=valid(addNode(fx,'lens.dof@1','fog').graph);
     expect(ids(b)).toEqual(['toLinear','warmKey','fog','dof','toDisplay','fargo']);
     const c=valid(addNode(fx,'color.cdl@1','$source').graph);

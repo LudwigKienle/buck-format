@@ -77,10 +77,15 @@ function makePattern(n:number,shape:(theta:number)=>number,unitArea:number):Patt
   for(let k=0;k<n;k++)a[k]=unitArea*s[k]*s[k]/s2;
   return{n,ux,uy,r,s,a};
 }
-/** Prefiltered taps, interleaved per pixel: mean of hw·rgb and mean of hw over CoC-similar pixels in a bokeh-shaped kernel. */
-type Level=Float32Array;
+/**
+ * Prefiltered taps, interleaved per pixel in `c`: mean of hw·rgb and mean of hw over CoC-similar pixels in a bokeh-shaped
+ * kernel of radius k + ½ (offsets dx, dy, flat dj). Level 0 is complete (done = null); others are filled on demand.
+ */
+interface Level {k:number;c:Float32Array;done:Uint8Array|null;dx:Int32Array;dy:Int32Array;dj:Int32Array;}
 interface State {
   W:number;H:number;src:Float32Array;R:Float32Array;Rs:Float32Array;key:Float32Array;hw:Float32Array;invR2:Float32Array;
+  /** R, Rs, key and invR2 interleaved per pixel (one cache line per gather tap). */
+  attr:Float32Array;
   /** 1 where the 2×2 block starting at this pixel is mutually `similar`, so bilinear taps need no per-corner test. */
   coherent:Uint8Array;
   unitArea:number;shape:(theta:number)=>number;patterns:Pattern[];taps:Taps[];levels:Level[];acc:Float64Array;
@@ -88,6 +93,8 @@ interface State {
   qx:number;qy:number;Rq:number;dq:number;
   /** A tap is foreground when it is nearer than q and its signed CoC is below this limit. */
   frontLimit:number;wx:number;wy:number;shift:number;areaScale:number;
+  /** Foreground radius band [fLo, fHi) of the current pass and the G² of the first foreground pass (color scale). */
+  fLo:number;fHi:number;fG2:number;
 }
 const MAX_PREFILTER=8;
 /**
@@ -98,30 +105,45 @@ export function prefilterRadius(radiusPx:number,unitArea=Math.PI){
   const spacing=Math.sqrt(unitArea*radiusPx*radiusPx/dofSampleCount(radiusPx,unitArea));
   return spacing<=1?0:Math.min(MAX_PREFILTER,Math.round(spacing*1.15)+1);
 }
+/** Tap spacing (px) of a gather pass of radius G after the 1/4 px quantization of `taps`. */
+function tapSpacing(radius:number,unitArea:number){const G=Math.ceil(radius*4)/4;return Math.sqrt(unitArea*G*G/dofSampleCount(G,unitArea));}
 function level(S:State,k:number):Level {
   const hit=S.levels[k];if(hit)return hit;
-  const {W,H,src,Rs,hw}=S,count=W*H,c=new Float32Array(count*4);
-  if(k===0){for(let i=0;i<count;i++){const w=hw[i];c[i*4]=w*src[i*4];c[i*4+1]=w*src[i*4+1];c[i*4+2]=w*src[i*4+2];c[i*4+3]=w;}}
-  else{
-    // CoC-bilateral prefilter with a kernel of the bokeh shape itself (radius k + ½): Minkowski sums of homothetic convex
-    // shapes keep their form, so polygons stay polygons, unlike with a box. Similar neighbors only, so layers never mix.
-    const dx:number[]=[],dy:number[]=[];
-    for(let oy=-k;oy<=k;oy++)for(let ox=-k;ox<=k;ox++){const r=Math.hypot(ox,oy);if(r===0||r<=(k+.5)*S.shape(Math.atan2(-oy,ox))){dx.push(ox);dy.push(oy);}}
-    const m=dx.length;
-    for(let y=0;y<H;y++)for(let x=0;x<W;x++){
-      const i=y*W+x,ri=Rs[i];let r=0,g=0,b=0,w=0,n=0;
-      for(let t=0;t<m;t++){
-        const xx=x+dx[t],yy=y+dy[t];if(xx<0||xx>=W||yy<0||yy>=H)continue;
-        const j=yy*W+xx;if(j!==i&&!similar(Rs[j],ri))continue;
-        const v=hw[j];r+=v*src[j*4];g+=v*src[j*4+1];b+=v*src[j*4+2];w+=v;n++;
-      }
-      c[i*4]=r/n;c[i*4+1]=g/n;c[i*4+2]=b/n;c[i*4+3]=w/n;
+  const {W,H,src,hw}=S,count=W*H,c=new Float32Array(count*4);
+  if(k===0){
+    for(let i=0;i<count;i++){const w=hw[i];c[i*4]=w*src[i*4];c[i*4+1]=w*src[i*4+1];c[i*4+2]=w*src[i*4+2];c[i*4+3]=w;}
+    return S.levels[k]={k,c,done:null,dx:new Int32Array(0),dy:new Int32Array(0),dj:new Int32Array(0)};
+  }
+  // CoC-bilateral prefilter with a kernel of the bokeh shape itself (radius k + ½): Minkowski sums of homothetic convex
+  // shapes keep their form, so polygons stay polygons, unlike with a box. Similar neighbors only, so layers never mix.
+  // Pixels are filled on first use (fillLevel); a pixel's value depends on its neighborhood only, never on the order.
+  const dx:number[]=[],dy:number[]=[];
+  for(let oy=-k;oy<=k;oy++)for(let ox=-k;ox<=k;ox++){const r=Math.hypot(ox,oy);if(r===0||r<=(k+.5)*S.shape(Math.atan2(-oy,ox))){dx.push(ox);dy.push(oy);}}
+  return S.levels[k]={k,c,done:new Uint8Array(count),dx:Int32Array.from(dx),dy:Int32Array.from(dy),dj:Int32Array.from(dx,(v,t)=>dy[t]*W+v)};
+}
+/** Prefiltered value of pixel i: taps in raster order, sums in float64, exactly the per-pixel definition above. */
+function fillLevel(S:State,L:Level,i:number){
+  const {W,H,src,Rs,R,hw}=S,{k,c,dx,dy,dj}=L,m=dj.length,x=i%W,y=(i-x)/W,ri=Rs[i],si=R[i]<SHARP;
+  let r=0,g=0,b=0,w=0,n=0;
+  // Inline `similar`: |Rs_j − Rs_i| ≤ 1 and the same sharp/scattering class (R = |Rs|).
+  if(x>=k&&x<W-k&&y>=k&&y<H-k){
+    for(let t=0;t<m;t++){
+      const j=i+dj[t];
+      if(j!==i){const d=Rs[j]-ri;if(d>1||d<-1||(R[j]<SHARP)!==si)continue;}
+      const v=hw[j],o=j*4;r+=v*src[o];g+=v*src[o+1];b+=v*src[o+2];w+=v;n++;
+    }
+  }else{
+    for(let t=0;t<m;t++){
+      const xx=x+dx[t],yy=y+dy[t];if(xx<0||xx>=W||yy<0||yy>=H)continue;
+      const j=yy*W+xx;
+      if(j!==i){const d=Rs[j]-ri;if(d>1||d<-1||(R[j]<SHARP)!==si)continue;}
+      const v=hw[j],o=j*4;r+=v*src[o];g+=v*src[o+1];b+=v*src[o+2];w+=v;n++;
     }
   }
-  return S.levels[k]=c;
+  const o=i*4;c[o]=r/n;c[o+1]=g/n;c[o+2]=b/n;c[o+3]=w/n;(L.done as Uint8Array)[i]=1;
 }
 /** Pixel-space taps of one pattern at radius G: nearest-pixel and bilinear-base offsets plus fractions, shared by every q. */
-interface Taps {n:number;G:number;dxN:Int32Array;dyN:Int32Array;bx:Int32Array;by:Int32Array;tx:Float64Array;ty:Float64Array;ox:Float64Array;oy:Float64Array;rho:Float64Array;s:Float64Array;a:Float64Array;prefilter:number;}
+interface Taps {n:number;G:number;dxN:Int32Array;dyN:Int32Array;/** dyN·W + dxN and the offset bounds, for q away from the borders. */djN:Int32Array;dxMin:number;dxMax:number;dyMin:number;dyMax:number;bx:Int32Array;by:Int32Array;tx:Float64Array;ty:Float64Array;ox:Float64Array;oy:Float64Array;rho:Float64Array;s:Float64Array;a:Float64Array;prefilter:number;}
 /** Radii are quantized up to 1/4 px so tap tables can be shared; the result depends on the pixel position only. */
 function taps(S:State,radius:number):Taps {
   const q=Math.ceil(radius*4),hit=S.taps[q];if(hit)return hit;
@@ -133,26 +155,33 @@ function taps(S:State,radius:number):Taps {
     const sx=G*pt.ux[k],sy=G*pt.uy[k];ox[k]=sx;oy[k]=sy;rho[k]=G*pt.r[k];
     dxN[k]=Math.floor(.5-sx);dyN[k]=Math.floor(.5-sy);bx[k]=Math.floor(-sx);by[k]=Math.floor(-sy);tx[k]=-sx-bx[k];ty[k]=-sy-by[k];
   }
-  return S.taps[q]={n,G,dxN,dyN,bx,by,tx,ty,ox,oy,rho,s:pt.s,a:pt.a,prefilter:prefilterRadius(G,S.unitArea)};
+  return S.taps[q]={n,G,dxN,dyN,djN:Int32Array.from(dxN,(v,k)=>dyN[k]*S.W+v),dxMin:Math.min(0,...dxN),dxMax:Math.max(0,...dxN),dyMin:Math.min(0,...dyN),dyMax:Math.max(0,...dyN),bx,by,tx,ty,ox,oy,rho,s:pt.s,a:pt.a,prefilter:prefilterRadius(G,S.unitArea)};
 }
-/** One gather pass of radius ≥ G around pixel (S.qx, S.qy); writes background sums to acc[0..3], foreground to acc[4..8]. */
+/**
+ * One gather pass of radius ≥ G around pixel (S.qx, S.qy); writes background sums to acc[0..3] and adds foreground sums
+ * of the scatterers with S.fLo ≤ R < S.fHi to acc[4..8].
+ */
 function gather(S:State,radius:number,doB:boolean,doF:boolean){
-  const T=taps(S,radius),{n,dxN,dyN,bx,by,tx,ty,ox,oy,rho,s,a}=T,lc=level(S,T.prefilter),nearest=T.prefilter>0;
-  const {W,H,R,Rs,key,invR2,coherent,qx:x,qy:y,Rq,dq,frontLimit,wx,wy,shift,acc}=S,ia=1/S.areaScale,iq=1/(Rq*Rq);
+  const T=taps(S,radius),{n,dxN,dyN,djN,bx,by,tx,ty,ox,oy,rho,s,a}=T,L=level(S,T.prefilter),lc=L.c,done=L.done,nearest=T.prefilter>0;
+  const {W,H,Rs,attr,coherent,qx:x,qy:y,Rq,dq,frontLimit,wx,wy,shift,acc,fLo,fHi}=S,ia=1/S.areaScale,iq=1/(Rq*Rq);
+  // Away from the borders the nearest tap pixel needs no clamping.
+  const inside=x+T.dxMin>=0&&x+T.dxMax<W&&y+T.dyMin>=0&&y+T.dyMax<H,qj=y*W+x;
   let bR=0,bG=0,bB=0,bW=0,fR=0,fG=0,fB=0,fW=0,alpha=0;
   for(let k=0;k<n;k++){
-    let ix=x+dxN[k],iy=y+dyN[k];ix=ix<0?0:ix>=W?W-1:ix;iy=iy<0?0:iy>=H?H-1:iy;
-    const j=iy*W+ix,Rp=R[j],front=key[j]<dq&&Rs[j]<frontLimit;
-    if(front?!doF||Rp<SHARP:!doB)continue;
+    let j:number;
+    if(inside)j=qj+djN[k];
+    else{let ix=x+dxN[k],iy=y+dyN[k];ix=ix<0?0:ix>=W?W-1:ix;iy=iy<0?0:iy>=H?H-1:iy;j=iy*W+ix;}
+    const pa=j*4,Rp=attr[pa],front=attr[pa+2]<dq&&attr[pa+1]<frontLimit;
+    if(front?!doF||Rp<fLo||Rp>=fHi:!doB)continue;
     // Samples at or behind q spread with q's radius: a sharp q gathers nothing from behind (no background bleeding over a
     // sharp subject), a blurred foreground q shows the neighboring background through its own blur (symmetric silhouettes).
     const reff=front?Rp:Rq;
     // Coverage of q by p's shape with a one-pixel soft edge measured along the sample ray.
     let cov=(reff-rho[k])*s[k]+.5;if(cov<=0)continue;if(cov>1)cov=1;
     if(shift>0){const vx=ox[k]-shift*reff*wx,vy=oy[k]-shift*reff*wy,cc=reff-Math.sqrt(vx*vx+vy*vy)+.5;if(cc<=0)continue;if(cc<cov)cov=cc;}
-    const w=a[k]*cov*ia*(front?invR2[j]:iq);
+    const w=a[k]*cov*ia*(front?attr[pa+3]:iq);
     // Prefiltered levels are already smooth at the tap spacing, so the nearest pixel suffices (about 4× cheaper).
-    if(nearest){const c=j*4,cr=w*lc[c],cg=w*lc[c+1],cb=w*lc[c+2],ch=w*lc[c+3];if(front){alpha+=w;fR+=cr;fG+=cg;fB+=cb;fW+=ch;}else{bR+=cr;bG+=cg;bB+=cb;bW+=ch;}continue;}
+    if(nearest){if(done!==null&&done[j]===0)fillLevel(S,L,j);const c=j*4,cr=w*lc[c],cg=w*lc[c+1],cb=w*lc[c+2],ch=w*lc[c+3];if(front){alpha+=w;fR+=cr;fG+=cg;fB+=cb;fW+=ch;}else{bR+=cr;bG+=cg;bB+=cb;bW+=ch;}continue;}
     // Dense taps fetch color bilinearly (like a GPU texture tap) from similar corners; CoC and depth stay nearest-pixel.
     let x0=x+bx[k],y0=y+by[k],fx=tx[k],fy=ty[k];
     if(x0<0){x0=0;fx=0;}else if(x0>=W-1){x0=W-1;fx=0;}
@@ -178,8 +207,12 @@ function gather(S:State,radius:number,doB:boolean,doF:boolean){
     else{bR+=cr;bG+=cg;bB+=cb;bW+=ch;}
   }
   if(doB){acc[0]=bR;acc[1]=bG;acc[2]=bB;acc[3]=bW;}
-  // Σ tap area (a·G²) / scatter area (unitArea·R²·areaScale) = fraction of q covered by foreground shapes.
-  if(doF){acc[4]=fR;acc[5]=fG;acc[6]=fB;acc[7]=fW;acc[8]=alpha*T.G*T.G/S.unitArea;}
+  // Σ tap area (a·G²) / scatter area (unitArea·R²·areaScale) = fraction of q covered by foreground shapes. Colors of a
+  // later (denser) pass are scaled to the tap area of the first pass so that both mix by covered area.
+  if(doF){
+    const G2=T.G*T.G,f=S.fG2===0?(S.fG2=G2,1):G2/S.fG2;
+    acc[4]+=fR*f;acc[5]+=fG*f;acc[6]+=fB*f;acc[7]+=fW*f;acc[8]+=alpha*G2/S.unitArea;
+  }
 }
 
 function renderDof(image:ImageBuf,depth:ScalarField,p:P):ImageBuf {
@@ -205,7 +238,8 @@ function renderDof(image:ImageBuf,depth:ScalarField,p:P):ImageBuf {
     coherent[i]=hi-lo<=1&&(R[i1]<SHARP)===s&&(R[i2]<SHARP)===s&&(R[i3]<SHARP)===s?1:0;
   }
   const invR2=new Float32Array(count);for(let i=0;i<count;i++)if(R[i]>=SHARP)invR2[i]=1/(R[i]*R[i]);
-  const S:State={W,H,src,R,Rs,key,hw,invR2,coherent,unitArea:Math.PI*m2/1024,shape,patterns:[],taps:[],levels:[],acc:new Float64Array(9),qx:0,qy:0,Rq:0,dq:0,frontLimit:0,wx:0,wy:0,shift:0,areaScale:1};
+  const attr=new Float32Array(count*4);for(let i=0;i<count;i++){attr[i*4]=R[i];attr[i*4+1]=Rs[i];attr[i*4+2]=key[i];attr[i*4+3]=invR2[i];}
+  const S:State={W,H,src,R,Rs,key,hw,invR2,attr,coherent,unitArea:Math.PI*m2/1024,shape,patterns:[],taps:[],levels:[],acc:new Float64Array(9),qx:0,qy:0,Rq:0,dq:0,frontLimit:0,wx:0,wy:0,shift:0,areaScale:1,fLo:SHARP,fHi:Infinity,fG2:0};
 
   // Tile max CoC radius and min signed CoC of scatterers, dilated to every tile a scatterer can reach (foreground reach).
   const tw=Math.ceil(W/TILE),th=Math.ceil(H/TILE),tMax=new Float64Array(tw*th),tMin=new Float64Array(tw*th).fill(Infinity);
@@ -223,6 +257,14 @@ function renderDof(image:ImageBuf,depth:ScalarField,p:P):ImageBuf {
       if(r>g)g=r;if(tMin[u]<m)m=tMin[u];
     }
     gMax[ty*tw+tx]=g;gMin[ty*tw+tx]=m;
+  }
+  // Smallest scatter radius in the tile and its 8 neighbors: decides whether a denser foreground pass is needed.
+  const tRmin=new Float64Array(tw*th).fill(Infinity),gRmin=new Float64Array(tw*th).fill(Infinity);
+  for(let y=0;y<H;y++)for(let x=0;x<W;x++){const r=R[y*W+x],t=(y/TILE|0)*tw+(x/TILE|0);if(r>=SHARP&&r<tRmin[t])tRmin[t]=r;}
+  for(let ty=0;ty<th;ty++)for(let tx=0;tx<tw;tx++){
+    let m=Infinity;
+    for(let vy=Math.max(0,ty-1);vy<=Math.min(th-1,ty+1);vy++)for(let vx=Math.max(0,tx-1);vx<=Math.min(tw-1,tx+1);vx++)if(tRmin[vy*tw+vx]<m)m=tRmin[vy*tw+vx];
+    gRmin[ty*tw+tx]=m;
   }
 
   // Cat eye: each shape is clipped by a second circle of the same radius, shifted toward the image center by
@@ -242,10 +284,22 @@ function renderDof(image:ImageBuf,depth:ScalarField,p:P):ImageBuf {
       const dx=x+.5-W/2,dy=y+.5-H/2,len=Math.hypot(dx,dy);
       S.shift=len>0?cat*len/halfDiag:0;S.wx=len>0?-dx/len:0;S.wy=len>0?-dy/len:0;S.areaScale=lensArea(S.shift)/Math.PI;
     }
-    acc.fill(0);
-    const gB=Rq+.5,gF=gMax[t]+1;
-    if(!sharp&&needF&&gF<=gB+1)gather(S,gF,true,true);
-    else{if(!sharp)gather(S,gB,true,false);if(needF)gather(S,gF,false,true);}
+    acc.fill(0);S.fG2=0;
+    const gB=Rq+.5,gF=gMax[t]+1,combined=!sharp&&needF&&gF<=gB+1;
+    if(!sharp&&!combined)gather(S,gB,true,false);
+    // Fix within lens.dof@1 (prototype draft 0.1): a sparse foreground tap stands for spacing² px of scatterers. A
+    // scatterer whose own radius is below the tap spacing (e.g. the soft depth ramp of an estimated silhouette) was
+    // counted with that whole area, so a single tap could reach coverage ≥ 1 and stamp a dark dot next to a sharp
+    // subject. Such scatterers are now left to a denser pass of radius spacing + 1, repeated until taps are ≤ 1 px apart.
+    if(needF){
+      let g=gF,hi=Infinity,doB=combined;
+      for(;;){
+        const sp=tapSpacing(g,S.unitArea),lo=sp>1&&(sp+1>TILE||gRmin[t]<sp)?sp:SHARP;
+        S.fLo=lo;S.fHi=hi;gather(S,g,doB,true);
+        if(lo===SHARP)break;
+        doB=false;hi=lo;g=lo+1;
+      }
+    }
     let br=src[c],bg=src[c+1],bb=src[c+2];
     if(!sharp&&acc[3]>0){br=acc[0]/acc[3];bg=acc[1]/acc[3];bb=acc[2]/acc[3];}
     const al=acc[8]>1?1:acc[8];
