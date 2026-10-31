@@ -1,5 +1,6 @@
 import { convertImage } from '../colorspace';
-import { clamp01, gaussianBlur, resample, scalarField } from '../field';
+import { clamp01, gaussianBlur, gaussianBlurWide, resample, scalarField } from '../field';
+import { extremeFilter } from '../nodes/masks';
 import { BuckError } from '../types';
 import type { ImageBuf, ScalarField } from '../types';
 import { skyRegion } from '../reference/timeofday';
@@ -28,9 +29,9 @@ function minFilter(v:Float32Array,w:number,h:number,r:number){
   for(let y=0;y<h;y++)for(let x=0;x<w;x++){let m=Infinity;for(let j=Math.max(0,y-r);j<=Math.min(h-1,y+r);j++)m=Math.min(m,tmp[j*w+x]);out[y*w+x]=m;}
   return out;
 }
-/** Area-average downscale of the sRGB code values (clipped to 0…1) into three planes. */
-function downscale(img:ImageBuf,w:number,h:number){
-  const src=convertImage(img,'sRGB - Display').data,W=img.width,H=img.height,planes=[0,1,2].map(()=>new Float32Array(w*h));
+/** Area-average downscale of sRGB code values (RGBA, clipped to 0…1) into three planes. */
+function downscale(src:Float32Array,W:number,H:number,w:number,h:number){
+  const planes=[0,1,2].map(()=>new Float32Array(w*h));
   for(let y=0;y<h;y++){
     const y0=Math.floor(y*H/h),y1=Math.max(y0+1,Math.floor((y+1)*H/h));
     for(let x=0;x<w;x++){
@@ -44,7 +45,7 @@ export function heuristicDepth(image:ImageBuf):ScalarField {
   const W=image.width,H=image.height;
   if(!(Number.isInteger(W)&&Number.isInteger(H)&&W>0&&H>0)||image.data.length<W*H*4)throw new BuckError('Das Bild für die Behelfstiefe ist leer oder unvollständig.');
   const s=Math.min(1,WORK_SIDE/Math.max(W,H)),w=Math.max(1,Math.round(W*s)),h=Math.max(1,Math.round(H*s)),n=w*h,side=Math.max(w,h);
-  const [r,g,b]=downscale(image,w,h),patch=Math.max(1,Math.round(.012*side)),sigma=Math.max(1,.02*side);
+  const srgb=convertImage(image,'sRGB - Display').data,[r,g,b]=downscale(srgb,W,H,w,h),patch=Math.max(1,Math.round(.012*side)),sigma=Math.max(1,.02*side);
   const position=new Float32Array(n),minRgb=new Float32Array(n),luma=new Float32Array(n),luma2=new Float32Array(n),sat=new Float32Array(n);
   for(let y=0;y<h;y++)for(let x=0;x<w;x++){
     const i=y*w+x,mx=Math.max(r[i],g[i],b[i]),mn=Math.min(r[i],g[i],b[i]),l=.2126*r[i]+.7152*g[i]+.0722*b[i];
@@ -64,22 +65,87 @@ export function heuristicDepth(image:ImageBuf):ScalarField {
   for(let i=0;i<n;i++)mix[i]=WEIGHTS.position*position[i]+WEIGHTS.haze*hz[i]+WEIGHTS.contrast*(1-ct[i])+WEIGHTS.saturation*(1-st[i]);
   const depth=stretch(gaussianBlur(mix,w,h,1,Math.max(1,.015*side))),out=resample(depth,w,h,1,W,H);
   for(let i=0;i<out.length;i++)out[i]=clamp01(out[i]);
-  markSky([r,g,b],depth,w,h,out,W,H);
+  markSky(srgb,W,H,[r,g,b],depth,w,h,out);
   return scalarField(W,H,out);
 }
 /**
  * Marks the sky as invalid depth (+Infinity), as a depth model does, so sky-dependent nodes (sky.replace) also work on
  * the stand-in depth. Uses the image-based sky region of the reference analysis (grown from the top border over smooth,
- * far pixels); no sky found leaves the depth unchanged.
+ * far pixels), refined at a higher resolution by refineSky; no sky found leaves the depth unchanged.
  */
-function markSky([r,g,b]:Float32Array[],depth:Float32Array,w:number,h:number,out:Float32Array,W:number,H:number){
+function markSky(srgb:Float32Array,W:number,H:number,[r,g,b]:Float32Array[],depth:Float32Array,w:number,h:number,out:Float32Array){
   if(w<8||h<8)return;
   // The sky search expects linear light: decode the sRGB code values of the downscaled planes.
   const lin=(v:number)=>v<=.04045?v/12.92:((v+.055)/1.055)**2.4,n=w*h,rgb=new Float32Array(n*3),Y=new Float32Array(n);
   for(let i=0;i<n;i++){const R=lin(r[i]),G=lin(g[i]),B=lin(b[i]);rgb[i*3]=R;rgb[i*3+1]=G;rgb[i*3+2]=B;Y[i]=.2126*R+.7152*G+.0722*B;}
   const sky=skyRegion({w,h,rgb,Y,depth:Float32Array.from(depth),depthKind:'heuristic'},true);
   if(sky.kind!=='image')return;
+  const s=Math.min(1,REFINE_SIDE/Math.max(W,H)),rw=Math.max(1,Math.round(W*s)),rh=Math.max(1,Math.round(H*s));
   const mask=new Float32Array(n);for(let i=0;i<n;i++)mask[i]=sky.mask[i];
-  const up=resample(mask,w,h,1,W,H);
+  const fine=refineSky(downscale(srgb,W,H,rw,rh),resample(mask,w,h,1,rw,rh),rw,rh),up=resample(fine,rw,rh,1,W,H);
   for(let i=0;i<out.length;i++)if(up[i]>=.5)out[i]=Infinity;
+}
+const REFINE_SIDE=1024,REFINE_BAND=.035,CLOUD_RUN=.15,CLOUD_LUMA=.8;
+/**
+ * The coarse sky search accepts only smooth pixels, so it stops short of every silhouette by roughly its blur radius. Inside a
+ * band of REFINE_BAND image widths around the coarse sky, a pixel joins the sky when (1) its color lies within half the
+ * distance |S−F| of the local sky color S (mean of the coarse sky nearby), F being the local foreground color (mean outside
+ * the band nearby), (2) it is as smooth as the sky: 3×3 standard deviation of log luminance at most twice the 95th percentile
+ * inside the coarse sky (floor 0.02), which keeps hazy, sky-colored but textured distant ridges out, and (3) it is 4-connected
+ * to the coarse sky through such pixels. Where S and F are hardly distinguishable the pixel stays foreground; the remaining
+ * one or two pixels at a silhouette are left to the color matte of sky.replace. Bright clouds that touch a ridge are added
+ * afterwards (see below). Input: sRGB planes and the upsampled coarse
+ * mask; output 0/1 at the same size.
+ */
+function refineSky(planes:Float32Array[],coarse:Float32Array,w:number,h:number){
+  const n=w*h,band=Math.max(2,Math.round(REFINE_BAND*Math.max(w,h))),sky=new Float32Array(n);
+  for(let i=0;i<n;i++)sky[i]=coarse[i]>=.5?1:0;
+  const near=extremeFilter(sky,w,h,band,true),fgW=new Float32Array(n),sNum=new Float32Array(n*3),fNum=new Float32Array(n*3);
+  for(let i=0;i<n;i++){fgW[i]=1-near[i];for(let c=0;c<3;c++){const v=planes[c][i];sNum[i*3+c]=v*sky[i];fNum[i*3+c]=v*fgW[i];}}
+  const sigma=band,sB=gaussianBlurWide(sNum,w,h,3,sigma),sW=gaussianBlurWide(sky,w,h,1,sigma),fB=gaussianBlurWide(fNum,w,h,3,sigma),fW=gaussianBlurWide(fgW,w,h,1,sigma);
+  const sd=localLogStd(planes,w,h),skySd:number[]=[];
+  for(let i=0;i<n;i++)if(sky[i])skySd.push(sd[i]);
+  skySd.sort((a,b)=>a-b);
+  const smooth=Math.max(.02,2*(skySd[Math.floor(.95*(skySd.length-1))]??0)),accept=new Uint8Array(n);
+  for(let i=0;i<n;i++){
+    if(sky[i]||!near[i]||sd[i]>smooth||sW[i]<1e-4||fW[i]<1e-4)continue;
+    let dd=0,cs=0,ss=0,ff=0;
+    for(let c=0;c<3;c++){const S=sB[i*3+c]/sW[i],F=fB[i*3+c]/fW[i],d=S-F,e=planes[c][i]-S;dd+=d*d;cs+=e*e;ss+=S*S;ff+=F*F;}
+    if(dd>.004*(ss+ff)&&cs<.25*dd)accept[i]=1;
+  }
+  const queue:number[]=[];
+  for(let i=0;i<n;i++)if(sky[i])queue.push(i);
+  for(let q=0;q<queue.length;q++){
+    const i=queue[q],x=i%w,y=(i-x)/w;
+    for(const j of [x>0?i-1:-1,x<w-1?i+1:-1,y>0?i-w:-1,y<h-1?i+w:-1])if(j>=0&&accept[j]&&!sky[j]){sky[j]=1;queue.push(j);}
+  }
+  // Clouds touching a ridge are not enclosed by sky, so the hole filling of the coarse search misses them. A vertical run of
+  // non-sky pixels with sky directly above and below (at most CLOUD_RUN image heights long) floats in the sky; it joins when
+  // its mean luminance is at least CLOUD_LUMA of the local sky's. Ridges, trees and figures have ground below them.
+  const luma=(v:(c:number)=>number)=>.2126*v(0)+.7152*v(1)+.0722*v(2),maxRun=Math.max(1,Math.round(CLOUD_RUN*h));
+  for(let x=0;x<w;x++){
+    let y=1;
+    while(y<h-1){
+      if(sky[y*w+x]||!sky[(y-1)*w+x]){y++;continue;}
+      let e=y;while(e<h&&!sky[e*w+x])e++;
+      if(e<h&&e-y<=maxRun){
+        let yc=0,ys=0,k=0;
+        for(let t=y;t<e;t++){const i=t*w+x;yc+=luma(c=>planes[c][i]);if(sW[i]>1e-4){ys+=luma(c=>sB[i*3+c]/sW[i]);k++;}}
+        if(k&&yc>=CLOUD_LUMA*ys)for(let t=y;t<e;t++)sky[t*w+x]=1;
+      }
+      y=e+1;
+    }
+  }
+  return sky;
+}
+/** 3×3 standard deviation of log luminance (sRGB code values, Rec.709 weights; clamped edges). */
+function localLogStd([r,g,b]:Float32Array[],w:number,h:number){
+  const n=w*h,l=new Float32Array(n),out=new Float32Array(n);
+  for(let i=0;i<n;i++)l[i]=Math.log(.2126*r[i]+.7152*g[i]+.0722*b[i]+1e-3);
+  for(let y=0;y<h;y++)for(let x=0;x<w;x++){
+    let s=0,s2=0,k=0;
+    for(let j=Math.max(0,y-1);j<=Math.min(h-1,y+1);j++)for(let i=Math.max(0,x-1);i<=Math.min(w-1,x+1);i++){const v=l[j*w+i];s+=v;s2+=v*v;k++;}
+    const m=s/k;out[y*w+x]=Math.sqrt(Math.max(0,s2/k-m*m));
+  }
+  return out;
 }

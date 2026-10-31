@@ -235,6 +235,33 @@ describe('heuristicDepth',()=>{
     for(let y=0;y<h;y++)for(let x=0;x<w;x++){const v=d.data[y*w+x];if(y<h*.3&&v===Infinity)sky++;if(y>h*.6&&v===Infinity)ground++;}
     expect(sky).toBeGreaterThan(w*h*.3*.8);expect(ground).toBe(0);
   });
+  it('lets the sky reach silhouettes but keeps textured, sky-colored distant ridges as ground',()=>{
+    // Sky above y=100; a textured tower (x 120…200, top y=50) and a hazy ridge in nearly the sky color but textured (x≥240, y≥84).
+    const w=320,h=180,img=imageBuf(w,h,'lin_rec709_srgb'),skyC=(y:number)=>[.45+.1*y/h,.62+.05*y/h,.9];
+    for(let y=0;y<h;y++)for(let x=0;x<w;x++){
+      const i=(y*w+x)*4,n=((x*7+y*13)%11)/11,tower=x>=120&&x<200&&y>=50,ridge=x>=240&&y>=84&&y<100;
+      const c=y>=100||tower?[.55+.3*n,.42+.25*n,.25+.2*n]:ridge?skyC(y).map(v=>v*(.8+.4*n)):skyC(y);
+      img.data[i]=c[0];img.data[i+1]=c[1];img.data[i+2]=c[2];img.data[i+3]=1;
+    }
+    const d=heuristicDepth(img),inf=(x:number,y:number)=>d.data[y*w+x]===Infinity;
+    for(const x of [130,160,190])expect(inf(x,47)).toBe(true);
+    for(const y of [60,80,95])expect(inf(117,y)).toBe(true);
+    for(const x of [130,160,190])expect(inf(x,53)).toBe(false);
+    let ridge=0;for(let y=86;y<98;y++)for(let x=250;x<310;x++)if(inf(x,y))ridge++;
+    expect(ridge).toBeLessThan(60*12*.1);
+  });
+  it('counts a bright cloud that touches a ridge as sky',()=>{
+    // Ground below y=100, a textured peak (x 150…170, top y=38) and a smooth white cloud (x 100…170, y 30…42) resting on it.
+    const w=320,h=180,img=imageBuf(w,h,'lin_rec709_srgb');
+    for(let y=0;y<h;y++)for(let x=0;x<w;x++){
+      const i=(y*w+x)*4,n=((x*7+y*13)%11)/11,ground=y>=100||x>=150&&x<170&&y>=38,cloud=x>=100&&x<170&&y>=30&&y<42&&!ground;
+      const c=ground?[.55+.3*n,.42+.25*n,.25+.2*n]:cloud?[1.6,1.6,1.65]:[.45+.1*y/h,.62+.05*y/h,.9];
+      img.data[i]=c[0];img.data[i+1]=c[1];img.data[i+2]=c[2];img.data[i+3]=1;
+    }
+    const d=heuristicDepth(img),inf=(x:number,y:number)=>d.data[y*w+x]===Infinity;
+    for(const x of [110,130,145])expect(inf(x,36)).toBe(true);
+    expect(inf(160,70)).toBe(false);
+  });
   it('puts hazy, flat, upper regions farther than saturated textured foreground',()=>{
     const d=heuristicDepth(heuristicInput(120,80)),mean=(y0:number,y1:number)=>{let s=0;for(let y=y0;y<y1;y++)for(let x=0;x<120;x++)s+=d.data[y*120+x];return s/((y1-y0)*120);};
     expect(mean(0,30)).toBeGreaterThan(mean(50,80)+.3);

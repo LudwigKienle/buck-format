@@ -38,7 +38,7 @@ Then open the printed URL. `npm test` runs the test suite, `npm run build` creat
 
 ### Real depth estimation (optional)
 
-Without a model, the editor uses a clearly labeled image heuristic as a stand-in for depth (it also detects the sky, so sky replacement works, with rougher edges). For real depth, download **Depth Anything V2 Small** (ONNX, Apache-2.0, about 99 MB) yourself and pick the file in the editor under *Hilfskanäle → Tiefe schätzen*:
+Without a model, the editor uses a clearly labeled image heuristic as a stand-in for depth (it also detects the sky, including clouds that touch a ridge, and refines the sky edge at up to 1024 px, so sky replacement works; very fine detail such as branches against the sky still needs real depth). For real depth, download **Depth Anything V2 Small** (ONNX, Apache-2.0, about 99 MB) yourself and pick the file in the editor under *Hilfskanäle → Tiefe schätzen*:
 
 - File: [`onnx/model.onnx`](https://huggingface.co/onnx-community/depth-anything-v2-small/blob/f7421df0cc30f121782ab050d42f0a423291dcde/onnx/model.onnx) from `onnx-community/depth-anything-v2-small`, revision `f7421df0cc30f121782ab050d42f0a423291dcde`
 - SHA-256: `afb6a5c28f3b6bf1618c6e43f02073ef9dfdc70e937502d51603e57b0a1df10c`
