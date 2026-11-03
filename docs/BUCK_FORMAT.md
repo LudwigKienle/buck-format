@@ -282,7 +282,7 @@ Farbraumkonvertierung zwischen zwei in §8 erlaubten Namen. Dieser Knoten ist de
 
 #### 5.3.4 `sky.replace@1` – Himmel ersetzen, tiefenbasiert
 
-- Eingänge: `image` (linear), `depth` (`scalar`, Pflicht), optional `mask`. `mask` und `amount` mischt der Renderer wie bei jedem Bildknoten **nach** dem Knoten (§5.1). Der Knoten selbst liest `mask` nicht, damit sie nicht doppelt wirkt.
+- Eingänge: `image` (linear), `depth` (`scalar`) und/oder `sky` (`scalar`, Wahrscheinlichkeit 0…1 aus einer Himmelssegmentierung, §6.5), mindestens einer der beiden; optional `mask`. Ist `sky` verbunden, gilt `R = 1` für `sky ≥ 0,5` statt der Tiefenregel in Schritt 1, `skyDepth` wirkt dann nicht. `mask` und `amount` mischt der Renderer wie bei jedem Bildknoten **nach** dem Knoten (§5.1). Der Knoten selbst liest `mask` nicht, damit sie nicht doppelt wirkt.
 - Parameter:
   - `source`: `"procedural"` oder `"image"`; bei `"image"` ist `file` (`skies/<name>.png`, §3.2) Pflicht.
   - `preset`: `night`, `starry-night`, `moonrise`, `twilight`, `blue-hour`, `golden-hour`, `overcast`, `clear-day`, `storm`, `sandstorm`, `aurora` oder `neon-night`. Hat keine Renderwirkung, dokumentiert nur die Herkunft der Werte. Alle Werte stehen explizit im Knoten. Die Vorlagenwerte sind redaktionell und gehören zum Editor, nicht zum Format.
@@ -378,6 +378,14 @@ Farbraumkonvertierung zwischen zwei in §8 erlaubten Namen. Dieser Knoten ist de
 - Grenzen: Additiv und ohne Energieerhaltung: Der Hof nimmt dem Spitzlicht kein Licht weg. Der Bloom wirkt dagegen auch im Inneren heller Flächen und kann sie bei hohen Werten aufhellen. Auf display-bezogenem Material sind Spitzlichter bei 1,0 beschnitten; ihre wahre Helligkeit ist unbekannt, daher ist die Schwelle dort ein Gestaltungswert. Physikalisch hängt Halation von Material, Belichtung und Lichthofschutzschicht ab; `@1` bildet das nicht nach.
 - Editor-Funktion: „Halation“, „Lichthof“, „Halo“ ergeben einen roten Hof (`intensity` 0,6, Radius 0,006); „Bloom“, „Glow“, „Glühen“, „Überstrahlen“ einen neutralen Bloom (`bloom` 0,3, `bloomRadius` 0,012). „Lampen glühen“ bleibt `light.practicals@1`.
 
+#### 5.3.9 `fill.inpaint@1` – Retusche aus einer vorbereiteten Platte
+
+- Eingänge: `image` (beliebiger Raum), `plate` (Bild, Pflicht; in der Regel eine deklarierte Bild-Eingabe, §6.5), optional `mask`.
+- Keine Parameter.
+- Referenzmathematik: Ausgabe ist `plate`, umgerechnet in den Raum von `image` (§8); Alpha kommt aus `image`. Wo die Platte erscheint, bestimmen wie bei jedem Bildknoten `mask` und `amount` (§5.1), üblicherweise dieselbe Region, aus der die Platte gefüllt wurde (`mask.input@1` der Lochmaske → `mask.refine@1` mit derselben Erweiterung und einer weichen Kante).
+- Der Knoten führt kein Modell aus. Die Platte ist Shot-Material wie die Tiefe: Sie stammt aus dem Analyse-Cache oder einer Schätzung (§6.5), der Render bleibt dadurch deterministisch. Fehlt sie, wird der Knoten nach `onMissing` überbrückt.
+- Editor-Funktion „Motiv entfernen“: Motivmaske (`$subject`) → Platte (`$plate`, MI-GAN) → `fill.inpaint@1` am Anfang der Lichtebene, vor jeder Belichtung und jedem Grade.
+
 ### 5.4 Masken (`scalar`-Ausgang)
 
 | Typ | Parameter | Zweck |
@@ -438,7 +446,7 @@ Oben in der Knotenliste wählt der Nutzer eine Tageszeit: „Wie aufgenommen“,
 }
 ```
 
-- `kind`: `depth`, `normals` oder `mask`.
+- `kind`: `depth`, `normals`, `mask` oder `image` (ein Bild in Quellgröße, etwa eine retuschierte Platte, §6.5; `onMissing: "constant"` ist für Bilder nicht erlaubt).
 - `semantics` bei Tiefe:
   - `relative-inverse`: affin-invariante inverse Tiefe (Disparität), wie relative Mono-Depth-Modelle sie liefern.
   - `relative-depth`: wachsend mit der Entfernung, ohne Skala.
@@ -447,7 +455,7 @@ Oben in der Knotenliste wählt der Nutzer eine Tageszeit: „Wie aufgenommen“,
   1. `{"type": "host-clip", "clip": "Depth"}`: vom Host geliefert, z. B. ein OFX-Zusatzclip oder ein EXR-AOV aus einer CG-Szene. Für CG-Material ist das die beste Quelle.
   2. `{"type": "cache"}`: vorhandener Analyse-Cache, passend zur Look-ID und zur Medienidentität (§6.4).
   3. `{"type": "derive", "method": "normals-from-depth@1", "from": "depth", "params": {…}}`: nur für Normalen; aus dem Tiefengradienten der unter `from` genannten Eingabe, deterministisch bei gleicher Tiefe.
-  4. `{"type": "estimate", "model": "<id aus models>"}`: ML-Schätzung, deren Ergebnis den Cache füllt.
+  4. `{"type": "estimate", "model": "<id aus models>"}`: ML-Schätzung, deren Ergebnis den Cache füllt. Das Modell muss zur Art passen: Tiefenmodelle für `depth`, Segmentierung (`output: "probability"`) für `mask`, Retusche (`output: "image"`) für `image`. Bei `image` ist `"hole": {"input": "<Masken-Eingabe>", "grow": <0…0,1>}` Pflicht: Die Lochmaske ist die genannte Masken-Eingabe, Schwelle 0,5, um `grow` Bildbreiten erweitert.
 - `onMissing`: `"fail"`, `"bypass-dependents"` (Standard; alle abhängigen Knoten werden überbrückt, mit Warnung) oder `"constant"` (z. B. Tiefe = 1, nur für Tests).
 
 ### 6.2 Normierung der Tiefe
@@ -502,6 +510,29 @@ Der Cache ist nicht Teil der `.buck`-Datei. Er wird pro Shot erzeugt:
 - Ein Host MUSS den Cache auch für den Render ohne ML verwenden können. Das ermöglicht Baselight-Renderknoten ohne GPU-Inferenz.
 
 ---
+
+### 6.5 Segmentierung und Retusche
+
+Neben Tiefe kann ein Modell Masken und Bilder liefern. Für sie gelten dieselben Regeln wie in §6.3 (Pin mit `weightsSha256`, kein automatischer Download, Ergebnis ist Shot-Material im Cache). Zusätzliche Felder im Pin:
+
+- `output`: `"probability"` (eine Wahrscheinlichkeit 0…1 je Pixel) oder `"image"` (sRGB, 8 Bit).
+- `preprocess.fit`: `"aspect"` (Standard: lange Seite = `longSide`, Seitenverhältnis bleibt), `"stretch"` (`longSide × longSide`) oder `"native"` (Quellgröße, Eingabe als uint8-Codewerte; das Modell skaliert intern, `mean`/`std` wirken nicht).
+- `postprocess.activation`: `"sigmoid"`, wenn das Modell Logits liefert.
+
+Registrierte Modelle des Referenz-Editors (geprüft am 03.11.2026 über die Hugging-Face-API und den SHA-256 der Dateien):
+
+| ID | Zweck | Datei, Größe | Lizenz | Vorverarbeitung |
+|---|---|---|---|---|
+| `skyseg-u2net@1` | Himmel samt Wolken, unabhängig von der Tiefe | [voyagerfromeast/skyseg](https://huggingface.co/voyagerfromeast/skyseg) `skyseg_fp16.onnx`, 88 MB, opset 11 | MIT (Ursprung [xiongzhu666/Sky-Segmentation-and-Post-processing](https://github.com/xiongzhu666/Sky-Segmentation-and-Post-processing), U²-Net) | 320 × 320 gestreckt, ImageNet-Normierung, erste Ausgabe |
+| `birefnet-lite@1` | Hauptmotiv (Person, Objekt) | [onnx-community/BiRefNet_lite-ONNX](https://huggingface.co/onnx-community/BiRefNet_lite-ONNX) `onnx/model_fp16.onnx`, 115 MB, opset 17 | MIT ([BiRefNet](https://github.com/ZhengPeng7/BiRefNet)) | 1024 × 1024 gestreckt, ImageNet-Normierung, Sigmoid |
+| `migan-512@1` | Retusche einer Lochmaske | [andraniksargsyan/migan](https://huggingface.co/andraniksargsyan/migan) `migan_pipeline_v2.onnx`, 28 MB, opset 17 | MIT ([Picsart MI-GAN](https://github.com/Picsart-AI-Research/MI-GAN)) | Quellgröße als uint8, Maske 255 = behalten, 0 = füllen; die Pipeline schneidet auf das Loch zu und füllt mit 512 × 512 |
+
+Hinweise:
+
+- **Kein Zufall, kein Seed.** MI-GAN und LaMa sind vorwärtsgerichtete Netze ohne Rauscheingang; gleiche Eingabe ergibt auf demselben Backend dieselbe Platte. Diffusionsmodelle mit festem Seed sind dagegen zwischen GPUs und Backends nicht bit-gleich und widersprechen §7. Sie kommen höchstens später als Toleranzklasse C mit gecachter Platte in Frage.
+- **ControlNet** (Canny, Tiefe) steuert die Bildgenerierung eines Diffusionsmodells; für Masken bringt es nichts. Masken werden mit Segmentierungsmodellen und der kantengeführten Matte (§5.3.4) besser.
+- **Speicher:** BiRefNet mit 1024 px überschreitet den 4-GB-Adressraum von WebAssembly; im Web läuft es nur über WebGPU. Die Himmelssegmentierung und MI-GAN laufen auch auf der CPU.
+- **Grenzen:** Segmentierung und Retusche arbeiten pro Bild, ohne zeitliche Glättung. Auf Video flackern Masken und Platte (§9); MI-GAN füllt große Löcher mit 512 px Auflösung und dadurch weicher als die Umgebung. Der Analyse-Cache des Referenz-Editors (§6.4) speichert Masken bereits, Bild-Eingaben noch nicht.
 
 ## 7. Determinismus und Referenz-Shader
 
@@ -822,6 +853,7 @@ Der Prototyp unter `src/buck/` ist eine TypeScript-Referenz im Browser und in No
 - **Phase 4, teilweise:** `normals-from-depth@1`, `light.relight@1` (Modus `add`) mit optionalem Hautschutz (§5.3.3) und `light.practicals@1` gibt es im Web; Modus `reshape`, gelernte Normalen und die Prüfung durch einen Coloristen fehlen.
 - **Optik (neu, §5.3.6–§5.3.8):** `lens.vignette@1`, `film.grain@1` und `film.halation@1` gibt es im Web und im Prompt („Filmkorn“, „35mm-Korn“, „Vignette“, „Halation“, „Bloom“, „Glow“). Chromatische Aberration, Verzeichnung, Flares und anamorphotische Effekte fehlen.
 - **Phase 3** (OFX, C++-Referenz) hat noch nicht begonnen.
+- **Segmentierung und Retusche (neu, §6.5, §5.3.9):** Eingabeart `image`, Schätzquellen für Masken und Bilder, Pins `skyseg-u2net@1`, `birefnet-lite@1`, `migan-512@1`, Knoten `fill.inpaint@1`, optionaler `sky`-Eingang an `sky.replace@1`. Im Editor das Panel „Masken & Retusche“.
 - **Änderungen der Referenzmathematik im Entwurf:** 03.11.2026, `sky.replace@1`: Bereinigung der Himmelsmaske (gespiegelter Himmel entfällt), Matte aus Farbschätzung plus farbgeführtem Guided Filter statt Gauß-Kante, farbtonerhaltende Entmischung im Komposit, Standard `edge` der Vorlagen 0,004 → 0,01 (§5.3.4). Ohne Tiefenmodell sucht die Behelfstiefe den Himmel feiner (bis 1024 px, Wolken an Graten eingeschlossen).
 
 ### Phase 1 – Spezifikation (dieses Dokument)

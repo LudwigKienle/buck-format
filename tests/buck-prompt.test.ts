@@ -4,7 +4,7 @@ import type { BuckGraph, BuckNode, NodeOf, NodeType } from '../src/buck/types';
 import { emptyGraph, promptToGraph } from '../src/buck/prompt';
 import { checkGraph, parseGraph } from '../src/buck/validate';
 import { parseLookPrompt } from '../src/color/prompt';
-import { DEFAULT_DEPTH_MODEL, KNOWN_MODELS } from '../src/buck/depth/models';
+import { DEFAULT_DEPTH_MODEL, KNOWN_MODELS, depthSemantics } from '../src/buck/depth/models';
 
 const fixture=JSON.parse(readFileSync(new URL('./fixtures/buck/fargo-fog-warm.json',import.meta.url),'utf8')) as BuckGraph;
 const types=(g:BuckGraph)=>g.nodes.map(n=>n.type);
@@ -46,7 +46,7 @@ describe('promptToGraph – §13 example', ()=>{
   it('declares depth and normals like the fixture with the default model pin', ()=>{
     const id=DEFAULT_DEPTH_MODEL;
     expect(graph.models).toEqual({[id]:KNOWN_MODELS[id]});
-    const depth=structuredClone(fixture.inputs.depth);depth.sources[2]={type:'estimate',model:id};depth.semantics=KNOWN_MODELS[id].output;
+    const depth=structuredClone(fixture.inputs.depth);depth.sources[2]={type:'estimate',model:id};depth.semantics=depthSemantics(KNOWN_MODELS[id]);
     expect(graph.inputs).toEqual({depth,normals:fixture.inputs.normals});
   });
   it('meta and understood chips', ()=>{

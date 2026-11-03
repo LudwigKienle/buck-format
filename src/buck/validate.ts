@@ -41,6 +41,7 @@ export const PARAM_RANGES:Record<NodeType,Record<string,Range>>={
   'lens.vignette@1':{strength:SIGNED,exposure:[-8,4],radius:[0,2],softness:[0,2],roundness:UNIT,center:POINT},
   'film.grain@1':{size:[.0002,.01],intensity:[0,2],response:UNIT,chroma:UNIT,seed:[0,65535]},
   'film.halation@1':{threshold:[.01,16],knee:[0,6],radius:[0,.1],intensity:[0,4],color:LIN_COLOR,'color.kelvin':KELVIN,bloom:[0,2],bloomRadius:[0,.1]},
+  'fill.inpaint@1':{},
 };
 /** Parameters whose lower bound is exclusive (CDL power > 0, §9.2 feather/softness > 0, positive radius and gamma). */
 const EXCLUSIVE_MIN=new Set(['color.cdl@1:power','mask.gradient@1:radius','mask.gradient@1:feather','mask.luma@1:softness','mask.refine@1:gamma']);
@@ -77,6 +78,7 @@ const SPECS:Record<NodeType,Record<string,Field>>={
   'lens.vignette@1':{strength:o('anim'),exposure:o('anim'),radius:ANIM,softness:ANIM,roundness:ANIM,center:o('point')},
   'film.grain@1':{size:ANIM,intensity:ANIM,response:ANIM,chroma:ANIM,seed:f('int'),animate:f('bool')},
   'film.halation@1':{threshold:ANIM,knee:ANIM,radius:ANIM,intensity:ANIM,color:f('color'),bloom:ANIM,bloomRadius:o('anim')},
+  'fill.inpaint@1':{},
 };
 const LOOK_FIELDS=['shadows','midtones','highlights','whiteClean','skinProtect','skinHue','key','contrast','saturation'] as const;
 
@@ -86,7 +88,7 @@ const CLIP=/^[A-Za-z][A-Za-z0-9_]{0,63}$/,VERSION=/^(0|[1-9][0-9]{0,3})\.(0|[1-9
 const RFC3339=/^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])T([01]\d|2[0-3]):[0-5]\d:([0-5]\d|60)(\.\d{1,9})?(Z|[+-]([01]\d|2[0-3]):[0-5]\d)$/;
 const RESERVED=new Set(['__proto__','constructor','prototype','source']);
 const DISPLAY_SPACES=SPACE_NAMES.filter(s=>!LINEAR_SPACES.includes(s));
-const KIND_OF_INPUT:Record<string,PortKind>={depth:'scalar',mask:'scalar',normals:'vector3'};
+const KIND_OF_INPUT:Record<string,PortKind>={depth:'scalar',mask:'scalar',normals:'vector3',image:'image'};
 // Safety bounds for free text and lists (not in the spec).
 const TEXT_MAX=500,LIST_MAX=100,KEYS_MAX=1000,SOURCES_MAX=8;
 
@@ -241,11 +243,23 @@ function checkSource(s:unknown,i:number,name:string,decl:Obj,inputs:Obj,models:O
       return;
     }
     case 'estimate':{
-      closed(s,['type','model'],where,err);
-      if(decl.kind!=='depth')return err(`${where}: „estimate“ ist in Version 1 nur für Tiefe erlaubt.`);
+      closed(s,['type','model','hole'],where,err);
+      if(decl.kind==='normals')return err(`${where}: „estimate“ ist für Tiefe, Masken und Bilder erlaubt, nicht für Normalen.`);
       const model=typeof s.model==='string'&&has(models,s.model)?models[s.model]:undefined;
       if(!isObj(model))return err(`${where}.model verweist auf das nicht deklarierte Modell ${q(s.model)}.`);
-      if(typeof decl.semantics==='string'&&model.output!==decl.semantics)err(`${where}: Modell ${q(s.model)} liefert ${q(model.output)}, die Eingabe ist aber als ${q(decl.semantics)} deklariert.`);
+      // Depth models feed depth, segmentation models (probability) masks, inpainting models (image) image inputs.
+      const fits=decl.kind==='depth'?model.output!=='probability'&&model.output!=='image':decl.kind==='mask'?model.output==='probability':model.output==='image';
+      if(!fits)err(`${where}: Modell ${q(s.model)} liefert ${q(model.output)} und passt nicht zu einer Eingabe der Art ${q(decl.kind)}.`);
+      else if(decl.kind==='depth'&&typeof decl.semantics==='string'&&model.output!==decl.semantics)err(`${where}: Modell ${q(s.model)} liefert ${q(model.output)}, die Eingabe ist aber als ${q(decl.semantics)} deklariert.`);
+      if(decl.kind==='image'){
+        // The hole is a declared mask input (> 0.5 = fill), grown by `grow` image widths before the model runs.
+        const h=s.hole,wh=`${where}.hole`;
+        if(!isObj(h))return err(`${wh} ist bei Bild-Eingaben Pflicht und muss ein Objekt {input, grow} sein.`);
+        closed(h,['input','grow'],wh,err);need(h,['input','grow'],wh,err);
+        const src=typeof h.input==='string'&&has(inputs,h.input)?inputs[h.input]:undefined;
+        if(has(h,'input')&&(!isObj(src)||src.kind!=='mask'))err(`${wh}.input muss eine deklarierte Masken-Eingabe nennen, ist aber ${q(h.input)}.`);
+        if(has(h,'grow'))num(h.grow,[0,.1],false,`${wh}.grow`,err);
+      }else if(has(s,'hole'))err(`${where}: „hole“ gibt es nur bei Bild-Eingaben.`);
       return;
     }
     default:err(`${where}.type muss „host-clip“, „cache“, „derive“ oder „estimate“ sein, ist aber ${q(s.type)}.`);
@@ -257,7 +271,8 @@ function checkInput(name:string,d:unknown,inputs:Obj,models:Obj,err:Report){
   if(!ID.test(name)||RESERVED.has(name))err(`${where}: Der Name muss [a-zA-Z0-9_-]{1,64} entsprechen und darf nicht „source“ oder ein reservierter Name sein.`);
   if(!isObj(d))return err(`${where} muss ein Objekt sein.`);
   closed(d,['kind','semantics','frame','required','sources','normalize','onMissing'],where,err);need(d,['kind','required','sources','onMissing'],where,err);
-  if(has(d,'kind'))oneOf(d.kind,['depth','normals','mask'],`${where}.kind`,err);
+  if(has(d,'kind'))oneOf(d.kind,['depth','normals','mask','image'],`${where}.kind`,err);
+  if(d.kind==='image'&&d.onMissing==='constant')err(`${where}: Eine Bild-Eingabe hat keinen sinnvollen Ersatzwert; „onMissing“ muss „fail“ oder „bypass-dependents“ sein.`);
   if(d.kind==='depth'){if(!has(d,'semantics'))err(`${where}: Tiefe braucht das Feld „semantics“.`);else oneOf(d.semantics,['relative-inverse','relative-depth','metric'],`${where}.semantics`,err);}
   else if(has(d,'semantics'))err(`${where}: „semantics“ ist nur bei Tiefe erlaubt.`);
   if(has(d,'frame')){if(d.kind!=='normals')err(`${where}: „frame“ ist nur bei Normalen erlaubt.`);else oneOf(d.frame,['camera'],`${where}.frame`,err);}
@@ -301,12 +316,13 @@ function checkModel(id:string,m:unknown,err:Report){
     if(typeof h!=='string'||h.length<1||h.length>200)err(`${where}.weightsSha256 muss ein Text mit 1 bis 200 Zeichen sein.`);
     else if(!PINNED.test(h)&&/^[0-9a-fA-F]+$/.test(h.trim()))err(`${where}.weightsSha256 ist kein gültiger SHA-256 (64 Hex-Zeichen in Kleinbuchstaben) und auch nicht als ungepinnt erkennbar.`);
   }
-  if(has(m,'output'))oneOf(m.output,['relative-inverse','relative-depth','metric'],`${where}.output`,err);
+  if(has(m,'output'))oneOf(m.output,['relative-inverse','relative-depth','metric','probability','image'],`${where}.output`,err);
   if(has(m,'preprocess')){
     const p=m.preprocess,w=`${where}.preprocess`,pk=['longSide','multipleOf','resize','inputSpace','mean','std'];
     if(!isObj(p))err(`${w} muss ein Objekt sein.`);
     else{
-      closed(p,pk,w,err);need(p,pk,w,err);
+      closed(p,[...pk,'fit'],w,err);need(p,pk,w,err);
+      if(has(p,'fit'))oneOf(p.fit,['aspect','stretch','native'],`${w}.fit`,err);
       const int=(k:string,lo:number,hi:number)=>{if(has(p,k)&&(!Number.isInteger(p[k])||(p[k] as number)<lo||(p[k] as number)>hi))err(`${w}.${k} muss eine ganze Zahl von ${lo} bis ${hi} sein.`);};
       int('longSide',1,LIMITS.imageSide);int('multipleOf',1,256);
       if(Number.isInteger(p.longSide)&&Number.isInteger(p.multipleOf)&&(p.multipleOf as number)>0&&(p.longSide as number)%(p.multipleOf as number)!==0)err(`${w}: „longSide“ muss ein Vielfaches von „multipleOf“ sein.`);
@@ -328,7 +344,7 @@ function checkModel(id:string,m:unknown,err:Report){
   }
   if(has(m,'postprocess')){
     const p=m.postprocess,w=`${where}.postprocess`;
-    if(!isObj(p))err(`${w} muss ein Objekt sein.`);else{closed(p,['resize'],w,err);need(p,['resize'],w,err);if(has(p,'resize'))oneOf(p.resize,['bilinear-to-source'],`${w}.resize`,err);}
+    if(!isObj(p))err(`${w} muss ein Objekt sein.`);else{closed(p,['resize','activation'],w,err);need(p,['resize'],w,err);if(has(p,'resize'))oneOf(p.resize,['bilinear-to-source'],`${w}.resize`,err);if(has(p,'activation'))oneOf(p.activation,['sigmoid'],`${w}.activation`,err);}
   }
 }
 

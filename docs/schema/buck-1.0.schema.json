@@ -469,6 +469,28 @@
             "model": {
               "type": "string",
               "pattern": "^[a-zA-Z0-9._@-]{1,64}$"
+            },
+            "hole": {
+              "type": "object",
+              "properties": {
+                "input": {
+                  "type": "string",
+                  "pattern": "^[a-zA-Z0-9_-]{1,64}$"
+                },
+                "grow": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 0.1
+                }
+              },
+              "required": [
+                "input",
+                "grow"
+              ],
+              "patternProperties": {
+                "^x-[A-Za-z0-9]": true
+              },
+              "additionalProperties": false
             }
           },
           "required": [
@@ -489,7 +511,8 @@
           "enum": [
             "depth",
             "normals",
-            "mask"
+            "mask",
+            "image"
           ]
         },
         "semantics": {
@@ -631,6 +654,28 @@
               }
             }
           }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "image"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "onMissing": {
+                "enum": [
+                  "fail",
+                  "bypass-dependents"
+                ]
+              }
+            }
+          }
         }
       ]
     },
@@ -686,7 +731,9 @@
           "enum": [
             "relative-inverse",
             "relative-depth",
-            "metric"
+            "metric",
+            "probability",
+            "image"
           ]
         },
         "preprocess": {
@@ -754,6 +801,13 @@
               ],
               "items": false,
               "minItems": 3
+            },
+            "fit": {
+              "enum": [
+                "aspect",
+                "stretch",
+                "native"
+              ]
             }
           },
           "required": [
@@ -797,6 +851,9 @@
           "properties": {
             "resize": {
               "const": "bilinear-to-source"
+            },
+            "activation": {
+              "const": "sigmoid"
             }
           },
           "required": [
@@ -1375,14 +1432,28 @@
                   },
                   "mask": {
                     "$ref": "#/$defs/ref"
+                  },
+                  "sky": {
+                    "$ref": "#/$defs/ref"
                   }
                 },
                 "required": [
-                  "image",
-                  "depth"
+                  "image"
                 ],
                 "patternProperties": {},
-                "additionalProperties": false
+                "additionalProperties": false,
+                "anyOf": [
+                  {
+                    "required": [
+                      "depth"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "sky"
+                    ]
+                  }
+                ]
               }
             }
           }
@@ -1537,6 +1608,45 @@
           "if": {
             "properties": {
               "type": {
+                "const": "fill.inpaint@1"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "properties": {
+              "params": {
+                "$ref": "#/$defs/params:fill.inpaint@1"
+              },
+              "inputs": {
+                "type": "object",
+                "properties": {
+                  "image": {
+                    "$ref": "#/$defs/ref"
+                  },
+                  "plate": {
+                    "$ref": "#/$defs/ref"
+                  },
+                  "mask": {
+                    "$ref": "#/$defs/ref"
+                  }
+                },
+                "required": [
+                  "image",
+                  "plate"
+                ],
+                "patternProperties": {},
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
                 "not": {
                   "enum": [
                     "color.convert@1",
@@ -1557,7 +1667,8 @@
                     "light.practicals@1",
                     "lens.vignette@1",
                     "film.grain@1",
-                    "film.halation@1"
+                    "film.halation@1",
+                    "fill.inpaint@1"
                   ]
                 }
               }
@@ -5479,6 +5590,14 @@
         "color",
         "bloom"
       ],
+      "patternProperties": {
+        "^x-[A-Za-z0-9]": true
+      },
+      "additionalProperties": false
+    },
+    "params:fill.inpaint@1": {
+      "type": "object",
+      "properties": {},
       "patternProperties": {
         "^x-[A-Za-z0-9]": true
       },

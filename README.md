@@ -9,10 +9,11 @@ A `.cube` LUT maps one color to another. It has no idea *where* a pixel is, so i
 | `color.look`, `color.cdl`, `color.lut3d`, `color.convert` | Color grade, ASC CDL, embedded 3D LUT, explicit color-space conversion |
 | `light.relight` | Light from a direction, color (Kelvin) and softness, via surface normals, optional skin protection |
 | `light.practicals` | Existing lamps light up (glow and light on their surroundings) or change color; manual light points |
-| `sky.replace` | New sky from the depth mask: night, starry sky, moonrise, blue/golden hour, overcast, storm, sandstorm, aurora, neon night … or an embedded PNG |
+| `sky.replace` | New sky from a sky segmentation or the depth mask, with an edge-aware matte: night, starry sky, moonrise, blue/golden hour, overcast, storm, sandstorm, aurora, neon night … or an embedded PNG |
 | `atmos.fog` | Depth-based haze and atmosphere |
 | `lens.dof` | Depth of field with focus, aperture and polygonal bokeh |
 | `lens.vignette`, `film.grain`, `film.halation` | Vignette, deterministic film grain, halation and bloom |
+| `fill.inpaint@1` | Puts an inpainted plate (e.g. with the subject removed) back into the image through a mask |
 | `mask.*` | Depth range, gradient, luma, image and combined masks |
 
 The editor orders nodes in four levels (light → atmosphere → optics → grade), has a time-of-day switch ("Nacht" also replaces the sky and darkens the scene), understands looks in German or English (*"Dune-Look bei Nacht, Lampen leuchten warm, Filmkorn"*), and can derive a whole graph from **just a reference image**: color, light color, time of day and sky, haze, depth of field, light direction and lamps, each as a suggestion with a confidence level ([docs/REFERENCE_ANALYSIS.md](docs/REFERENCE_ANALYSIS.md)).
@@ -44,6 +45,18 @@ Without a model, the editor uses a clearly labeled image heuristic as a stand-in
 - SHA-256: `afb6a5c28f3b6bf1618c6e43f02073ef9dfdc70e937502d51603e57b0a1df10c`
 
 The editor refuses any file whose hash does not match the pin. It runs via WebGPU when available, otherwise WebAssembly. The model handles still images only; each video frame would be estimated separately and could flicker.
+
+### Masks and retouching (optional)
+
+The panel *Masken & Retusche* runs three more local models, each pinned by its SHA-256 like the depth model. Download them yourself and pick the file in the panel; nothing is downloaded automatically.
+
+| Step | File | SHA-256 | License |
+|---|---|---|---|
+| Sky (incl. clouds), used by `sky.replace` instead of depth | [`skyseg_fp16.onnx`](https://huggingface.co/voyagerfromeast/skyseg/blob/d76f97cf68f049654f087d78d071dfd7505b2561/skyseg_fp16.onnx), 88 MB | `74d87f4a69378a610a6be662f859c38cfbdfdd75ff74bbfc54842965ed6fc9f7` | MIT |
+| Subject (person, object) as the `$subject` mask | [`onnx/model_fp16.onnx`](https://huggingface.co/onnx-community/BiRefNet_lite-ONNX/blob/de15b22ba131738a16dff04aab8bdf8dc32e3ac1/onnx/model_fp16.onnx) (BiRefNet lite), 115 MB | `d39b897ceb16ae654c1731f3dba0cf9b368d9cae74b5a57459b455cc8bfec402` | MIT |
+| Remove the subject (inpainting) | [`migan_pipeline_v2.onnx`](https://huggingface.co/andraniksargsyan/migan/blob/406830d0fa60666da0071c342ad2fbc8f30c5c64/migan_pipeline_v2.onnx) (MI-GAN), 28 MB | `6f1f3530a1a2324b19752018ce756088b07973cda8d7d890034ace5c8a48c40b` | MIT |
+
+Inpainting is a feed-forward GAN: no noise, no seed, the same input gives the same plate on the same backend. The plate is shot data like depth; the `.buck` file only declares it and the `fill.inpaint@1` node. Known limit: BiRefNet lite needs WebGPU with at least 11 storage buffers per shader stage, so it does not run on Apple GPUs (10) or on the CPU (WebAssembly memory). Sky segmentation and MI-GAN run everywhere.
 
 ## Specification
 

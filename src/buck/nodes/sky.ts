@@ -216,11 +216,14 @@ export const skyNode:NodeImpl<'sky.replace@1'>={
   evaluate(inputs:Record<string,Buf|undefined>,p:P,ctx){
     const image=inputs.image,depth=inputs.depth;
     if(!image||image.kind!=='image')throw new BuckError('Himmel: Bildeingang fehlt.');
-    if(!depth||depth.kind!=='scalar')throw new BuckError('Himmel: Tiefeneingang fehlt.');
+    const skyIn=inputs.sky;
+    if(!(depth&&depth.kind==='scalar')&&!(skyIn&&skyIn.kind==='scalar'))throw new BuckError('Himmel: Weder Tiefe noch Himmelsmaske ist verbunden.');
     if(!isLinearSpace(image.space))throw new BuckError(`Himmel braucht einen linearen Farbraum, Eingang ist „${image.space}“. Davor einen Konvertierungsknoten setzen.`);
     const {width:W,height:H}=image,n=W*H;
-    if(depth.width!==W||depth.height!==H)throw new BuckError(`Himmel: Tiefe ${depth.width}×${depth.height} passt nicht zum Bild ${W}×${H}.`);
-    const raw=rawSkyMask(depth.data,p.skyDepth),src=image.data,out:ImageBuf=imageBuf(W,H,image.space,new Float32Array(src));
+    const field=skyIn&&skyIn.kind==='scalar'?skyIn:depth!;
+    if(field.width!==W||field.height!==H)throw new BuckError(`Himmel: ${skyIn?'Himmelsmaske':'Tiefe'} ${field.width}×${field.height} passt nicht zum Bild ${W}×${H}.`);
+    // A sky segmentation (probability) wins over depth: ≥ 0.5 is sky; skyDepth then has no effect.
+    const raw=skyIn&&skyIn.kind==='scalar'?Float32Array.from(skyIn.data,v=>v>=.5?1:0):rawSkyMask(field.data,p.skyDepth),src=image.data,out:ImageBuf=imageBuf(W,H,image.space,new Float32Array(src));
     if(!raw.some(v=>v>0))return out;
     const {alpha:mask,oldSky,fg,clean}=skyMatte(src,raw,W,H,Math.max(0,p.edge),lumaWeights(image.space));
     const hz=p.horizonY??autoHorizon(clean,W,H);

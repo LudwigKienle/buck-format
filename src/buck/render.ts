@@ -1,6 +1,6 @@
 import { normalsFromDepth } from './aux/normals';
 import { isLinearSpace } from './colorspace';
-import { scalarField, vectorField } from './field';
+import { resample, scalarField, vectorField } from './field';
 import { evalAnimatable, resolveParams } from './keyframes';
 import { NODE_IMPLS } from './nodes/index';
 import type { DepthRangeContext } from './nodes/masks';
@@ -16,9 +16,9 @@ const PORT_TABLE:PortTable=PORTS;
 const KIND_NAME:Record<PortKind,string>={image:'ein Bild',scalar:'ein Skalarfeld',vector3:'ein Vektorfeld'};
 
 const inputName=(ref:string)=>ref.slice(1);
-/** Declared inputs bind by kind: every depth input reads aux.depth, every normals input aux.normals, masks by name. */
-function channel(aux:AuxChannels,name:string,decl:InputDecl):ScalarField|VectorField|undefined {
-  return decl.kind==='depth'?aux.depth:decl.kind==='normals'?aux.normals:aux.masks[name];
+/** Declared inputs bind by kind: every depth input reads aux.depth, every normals input aux.normals, masks and images by name. */
+function channel(aux:AuxChannels,name:string,decl:InputDecl):ScalarField|VectorField|ImageBuf|undefined {
+  return decl.kind==='depth'?aux.depth:decl.kind==='normals'?aux.normals:decl.kind==='image'?aux.images?.[name]:aux.masks[name];
 }
 const deriveSources=(decl:InputDecl)=>decl.sources.flatMap(s=>s.type==='derive'&&s.method==='normals-from-depth@1'?[s]:[]);
 
@@ -80,6 +80,11 @@ export function prepareAux(graph:BuckGraph,aux:AuxChannels,width:number,height:n
     const m=aux.masks[name];checkField(m,1,name);
     out.masks[name]=sameSize(m,width,height)?m:scalarField(width,height,resampleValid(m.data,m.width,m.height,1,width,height,()=>true,0,false));
   }
+  for(const name of Object.keys(aux.images??{}).sort()){
+    const m=aux.images![name];checkField(m,4,name);
+    out.images??={};
+    out.images[name]=sameSize(m,width,height)?m:{...m,width,height,data:resample(m.data,m.width,m.height,4,width,height)};
+  }
   const names=Object.keys(graph.inputs);
   for(const name of names){
     const decl=graph.inputs[name];
@@ -90,6 +95,8 @@ export function prepareAux(graph:BuckGraph,aux:AuxChannels,width:number,height:n
   for(const name of names){
     const decl=graph.inputs[name];
     if(decl.onMissing!=='constant'||channel(out,name,decl))continue;
+    // An image input has no meaningful constant (the validator forbids 'constant' for it); it stays missing.
+    if(decl.kind==='image')continue;
     if(decl.kind==='depth')out.depth=scalarField(width,height,new Float32Array(width*height).fill(1));
     else if(decl.kind==='normals'){const v=vectorField(width,height);for(let i=2;i<v.data.length;i+=3)v.data[i]=1;out.normals=v;}
     else out.masks[name]=scalarField(width,height,new Float32Array(width*height).fill(1));

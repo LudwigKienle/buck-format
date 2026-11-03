@@ -1,6 +1,6 @@
 import { DEFAULT_SETTINGS } from '../../color/engine';
 import { NEUTRAL_LOOK } from '../../color/look';
-import { DEFAULT_DEPTH_MODEL, KNOWN_MODELS } from '../depth/models';
+import { DEFAULT_DEPTH_MODEL, INPAINT_MODEL, KNOWN_MODELS, depthSemantics } from '../depth/models';
 import { skyPresetParams } from '../nodes/sky';
 import { BuckError, LIMITS, LINEAR_SPACES, PORTS } from '../types';
 import { topoOrder } from '../validate';
@@ -26,6 +26,7 @@ export const NODE_CATALOG:CatalogEntry[]=[
   {type:'lens.vignette@1',label:'Vignette',group:'Optik',description:'Abfall zum Bildrand, als Faktor oder in Blendenstufen, rund oder dem Bildformat folgend.'},
   {type:'film.halation@1',label:'Halation & Bloom',group:'Optik',description:'Rötlicher Lichthof um helle Spitzlichter wie bei Farbnegativfilm, optional neutrales Glühen.'},
   {type:'film.grain@1',label:'Filmkorn',group:'Optik',description:'Deterministisches Filmkorn, stärker in Mitten und Schatten, monochrom oder farbig, je Frame neu.'},
+  {type:'fill.inpaint@1',label:'Retusche (Platte)',group:'Licht',description:'Setzt eine vorbereitete, retuschierte Platte ein (Bild-Eingabe $plate), etwa aus „Motiv entfernen“ unter Masken & Retusche.'},
   {type:'sky.replace@1',label:'Himmel ersetzen',group:'Raum',description:'Ersetzt den Himmel (ungültige oder ferne Tiefe) durch einen prozeduralen Himmel oder ein PNG.'},
   {type:'light.relight@1',label:'Relight',group:'Licht',description:'Zusätzliches Licht aus einer Richtung über Normalen.'},
   {type:'light.practicals@1',label:'Lampen & Lichtfarbe',group:'Licht',description:'Erkennt helle Lichtquellen im Bild, lässt sie leuchten (Glühen, Raumlicht) und färbt ihr Licht um.'},
@@ -44,7 +45,7 @@ const ID_BASE:Record<NodeType,string>={
   'atmos.fog@1':'fog','lens.dof@1':'dof','light.relight@1':'relight','sky.replace@1':'sky','light.practicals@1':'practicals',
   'mask.depthRange@1':'depthMask','mask.gradient@1':'gradientMask','mask.luma@1':'lumaMask','mask.input@1':'inputMask',
   'mask.image@1':'imageMask','mask.combine@1':'combineMask','mask.refine@1':'refineMask',
-  'lens.vignette@1':'vignette','film.grain@1':'grain','film.halation@1':'halation',
+  'lens.vignette@1':'vignette','film.grain@1':'grain','film.halation@1':'halation','fill.inpaint@1':'inpaint',
 };
 type Template<T extends NodeType>={inputs:Record<string,Ref>;params:NodeParamMap[T]};
 /** Masks default to "no restriction" or identity; image placeholders get wired by addNode. */
@@ -77,6 +78,8 @@ const DEFAULTS:{[T in NodeType]:()=>Template<T>}={
   'lens.vignette@1':()=>({inputs:{image:'$source'},params:{exposure:-.8,radius:.3,softness:.45,roundness:.3}}),
   'film.grain@1':()=>({inputs:{image:'$source'},params:{size:.0007,intensity:.08,response:.8,chroma:.2,seed:0,animate:true}}),
   'film.halation@1':()=>({inputs:{image:'$source'},params:{threshold:.8,knee:1.5,radius:.006,intensity:.5,color:[1,.22,.04],bloom:0}}),
+  // The plate input is created by the aux panel ("Motiv entfernen"); a node added by hand points at `$plate`.
+  'fill.inpaint@1':()=>({inputs:{image:'$source',plate:'$plate'},params:{}}),
 };
 /** A fresh node with default parameters. Image nodes start at `$source`; addNode wires them into the chain. */
 export function defaultNode(type:NodeType,id:string):BuckNode{
@@ -126,7 +129,7 @@ export const LEVELS:{id:Level;label:string;description:string}[]=[
 ];
 const LEVEL_INDEX:Record<Level,number>={light:0,atmosphere:1,optics:2,grade:3};
 /** Order inside a level: lens before film, sky before fog, exposure before added light (10 per level). */
-const SUB_RANK:Partial<Record<NodeType,number>>={'light.relight@1':1,'light.practicals@1':2,'sky.replace@1':10,'atmos.fog@1':11,
+const SUB_RANK:Partial<Record<NodeType,number>>={'fill.inpaint@1':0,'light.relight@1':1,'light.practicals@1':2,'sky.replace@1':10,'atmos.fog@1':11,
   'lens.dof@1':20,'lens.vignette@1':21,'film.halation@1':22,'film.grain@1':23};
 /**
  * Level of an image node: color.cdl@1 in a linear space is scene exposure (light), in a display space grade; look and 3D-LUT
@@ -265,7 +268,7 @@ function rebuildConversions(graph:BuckGraph):BuckGraph{
 }
 
 function depthDecl(pin:ModelPin|undefined):InputDecl{
-  const semantics=pin?.output??'relative-inverse';
+  const semantics=pin?depthSemantics(pin):'relative-inverse';
   return {kind:'depth',semantics,required:false,
     sources:[{type:'host-clip',clip:'Depth'},{type:'cache'},...pin?[{type:'estimate' as const,model:DEFAULT_DEPTH_MODEL}]:[]],
     // §6.2: one scale/shift per shot from the 2 %/98 % percentiles; metric depth is not normalized.
@@ -273,6 +276,8 @@ function depthDecl(pin:ModelPin|undefined):InputDecl{
 }
 const normalsDecl=(from:string):InputDecl=>({kind:'normals',frame:'camera',required:false,
   sources:[{type:'host-clip',clip:'Normals'},{type:'cache'},{type:'derive',method:'normals-from-depth@1',from,params:{smoothing:.002}}],onMissing:'bypass-dependents'});
+/** A plate referenced without a declaration: inpainted from `$subject` (editor/ml.ts keeps the same defaults). */
+const plateDecl=():InputDecl=>({kind:'image',required:false,sources:[{type:'cache'},{type:'estimate',model:INPAINT_MODEL,hole:{input:'subject',grow:.006}}],onMissing:'bypass-dependents'});
 const maskDecl=(name:string):InputDecl=>{
   const clip=name.replace(/[^A-Za-z0-9_]/g,'_').replace(/^[^A-Za-z]/,'M').slice(0,64);
   return {kind:'mask',required:false,sources:[{type:'host-clip',clip:clip.charAt(0).toUpperCase()+clip.slice(1)}],onMissing:'bypass-dependents'};
@@ -281,21 +286,25 @@ const maskDecl=(name:string):InputDecl=>{
 /**
  * Declares exactly the depth and normals inputs the nodes reference (normals derive from depth, so they keep it alive) and the
  * model pins their estimate sources name. Missing declarations follow the fixture; existing ones are kept verbatim. Declared
- * masks are added when referenced but never removed.
+ * masks are added when referenced but never removed; image inputs (plates) live as long as a node references them. A declared
+ * mask input named `sky` (sky segmentation, editor/ml.ts) is connected to the `sky` port of every sky.replace@1.
  */
 export function ensureInputs(graph:BuckGraph):BuckGraph{
+  const skyMask=graph.inputs.sky?.kind==='mask';
+  if(skyMask&&graph.nodes.some(n=>n.type==='sky.replace@1'&&n.inputs.sky===undefined))
+    graph={...graph,nodes:graph.nodes.map(n=>n.type==='sky.replace@1'&&n.inputs.sky===undefined?{...n,inputs:{...n.inputs,sky:'$sky'}}:n)};
   const used=new Map<string,InputDecl['kind']>();
   const use=(name:string,kind:InputDecl['kind'])=>{if(!used.has(name))used.set(name,kind);};
   for(const n of graph.nodes){
-    for(const [port,ref] of Object.entries(n.inputs))if(ref.startsWith('$')&&ref!=='$source')use(ref.slice(1),port==='depth'?'depth':port==='normals'?'normals':'mask');
+    for(const [port,ref] of Object.entries(n.inputs))if(ref.startsWith('$')&&ref!=='$source')use(ref.slice(1),port==='depth'?'depth':port==='normals'?'normals':port==='plate'?'image':'mask');
     if(n.type==='mask.input@1')use(n.params.input.replace(/^\$/,''),'mask');
   }
   const pin=KNOWN_MODELS[DEFAULT_DEPTH_MODEL],decls=new Map<string,InputDecl>();
   const need=(name:string,kind:InputDecl['kind'])=>{
     if(decls.has(name))return;
-    const d=graph.inputs[name]??(kind==='depth'?depthDecl(pin):kind==='normals'?normalsDecl('depth'):maskDecl(name));
+    const d=graph.inputs[name]??(kind==='depth'?depthDecl(pin):kind==='normals'?normalsDecl('depth'):kind==='image'?plateDecl():maskDecl(name));
     decls.set(name,d);
-    for(const s of d.sources)if(s.type==='derive')need(s.from,'depth');
+    for(const s of d.sources){if(s.type==='derive')need(s.from,'depth');if(s.type==='estimate'&&s.hole)need(s.hole.input,'mask');}
   };
   for(const [name,kind] of used)need(name,kind);
   for(const [name,d] of Object.entries(graph.inputs))if(d.kind==='mask')need(name,'mask');

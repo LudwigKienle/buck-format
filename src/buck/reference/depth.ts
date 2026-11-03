@@ -1,7 +1,7 @@
 import { normalizeDepth } from '../aux/normalize';
 import { estimateDepth } from '../depth/estimate';
 import { HEURISTIC_LABEL, heuristicDepth } from '../depth/heuristic';
-import { KNOWN_MODELS, isPinned } from '../depth/models';
+import { KNOWN_MODELS, depthSemantics, isPinned } from '../depth/models';
 import type { ImageBuf, ScalarField } from '../types';
 import type { DepthKind } from './common';
 /**
@@ -23,7 +23,7 @@ export async function referenceDepth(image:ImageBuf,opts:{useModel:boolean;model
   if(opts.useModel&&pin&&file&&isPinned(pin)){
     try{
       const r=await estimateDepth(image,pin,await file.arrayBuffer(),{signal:opts.signal,onProgress:opts.onProgress});
-      const depth=normalizeDepth([r.raw],pin.output,'shot-percentile',2,98).frames[0];
+      const depth=normalizeDepth([r.raw],depthSemantics(pin),'shot-percentile',2,98).frames[0];
       return {depth,kind:'model',label:`${pin.name} · sha256 ${r.weightsSha256.slice(0,8)}… (Gewichte aus den Hilfskanälen)`};
     }catch(e){
       if(opts.signal?.aborted)throw e;

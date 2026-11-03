@@ -9,7 +9,7 @@ import { normalizeDepth } from '../aux/normalize';
 import { sha256Hex } from '../container';
 import { checkPin, estimateDepth } from '../depth/estimate';
 import { HEURISTIC_LABEL, heuristicDepth } from '../depth/heuristic';
-import { DEFAULT_DEPTH_MODEL, KNOWN_MODELS, MODEL_INFO, isPinned } from '../depth/models';
+import { DEFAULT_DEPTH_MODEL, KNOWN_MODELS, MODEL_INFO, depthSemantics, isPinned } from '../depth/models';
 import { resample, scalarField } from '../field';
 import { hasPngMagic, sanitizePng } from '../png';
 import { missingInputs } from '../render';
@@ -97,7 +97,7 @@ type Estimate=typeof estimateDepth;
 export async function estimateToDepth(image:ImageBuf,pin:ModelPin,weights:ArrayBuffer,decl:InputDecl|undefined,opts:{signal?:AbortSignal;onProgress?:(p:number)=>void},estimate:Estimate=estimateDepth){
   const r=await estimate(image,pin,weights,{signal:opts.signal,onProgress:opts.onProgress});
   const {mode,low,high}=normalizeOpts(decl),raw=resampleDepth(r.raw,image.width,image.height);
-  const depth=normalizeDepth([raw],pin.output,mode,low,high).frames[0];
+  const depth=normalizeDepth([raw],depthSemantics(pin),mode,low,high).frames[0];
   return {depth,sha:r.weightsSha256,label:`${pin.name} · sha256 ${r.weightsSha256.slice(0,8)}… · ${r.backend==='webgpu'?'WebGPU':'WASM'}`};
 }
 

@@ -75,6 +75,9 @@ export interface GrainParams {size:Animatable;intensity:Animatable;response:Anim
 /** film.halation@1 (spec §5.3.8): red halo around bright highlights plus an optional neutral bloom. */
 export interface HalationParams {threshold:Animatable;knee:Animatable;radius:Animatable;intensity:Animatable;color:ColorValue;bloom:Animatable;bloomRadius?:Animatable;}
 
+/** fill.inpaint@1 has no parameters: the plate comes in through the `plate` port, the region through `mask`. */
+export type InpaintParams=Record<string,never>;
+
 export interface NodeParamMap {
   'color.convert@1':ConvertParams;'color.look@1':LookParams;'color.cdl@1':CdlParams;'color.lut3d@1':Lut3dParams;
   'atmos.fog@1':FogParams;'lens.dof@1':DofParams;'light.relight@1':RelightParams;
@@ -82,6 +85,7 @@ export interface NodeParamMap {
   'mask.image@1':ImageMaskParams;'mask.combine@1':CombineParams;'mask.refine@1':RefineParams;
   'sky.replace@1':SkyParams;'light.practicals@1':PracticalsParams;
   'lens.vignette@1':VignetteParams;'film.grain@1':GrainParams;'film.halation@1':HalationParams;
+  'fill.inpaint@1':InpaintParams;
 }
 export type NodeType=keyof NodeParamMap;
 /** A reference is a node id or `$name` of a declared input; `$source` is the host image. */
@@ -112,20 +116,22 @@ export const PORTS:Record<NodeType,{inputs:PortSpec[];output:PortKind;space:'lin
   'mask.image@1':{inputs:[],output:'scalar',space:'any'},
   'mask.combine@1':{inputs:[{name:'a',kind:'scalar',optional:false},{name:'b',kind:'scalar',optional:false}],output:'scalar',space:'any'},
   'mask.refine@1':{inputs:[{name:'mask',kind:'scalar',optional:false}],output:'scalar',space:'any'},
-  'sky.replace@1':{inputs:[{name:'image',kind:'image',optional:false},{name:'depth',kind:'scalar',optional:false},{name:'mask',kind:'scalar',optional:true}],output:'image',space:'linear'},
+  // depth or sky (a segmentation probability) must be connected; sky wins when both are.
+  'sky.replace@1':{inputs:[{name:'image',kind:'image',optional:false},{name:'depth',kind:'scalar',optional:true},{name:'sky',kind:'scalar',optional:true},{name:'mask',kind:'scalar',optional:true}],output:'image',space:'linear'},
   'light.practicals@1':{inputs:[{name:'image',kind:'image',optional:false},{name:'depth',kind:'scalar',optional:true},{name:'normals',kind:'vector3',optional:true},{name:'mask',kind:'scalar',optional:true}],output:'image',space:'linear'},
   'lens.vignette@1':{inputs:[{name:'image',kind:'image',optional:false},{name:'mask',kind:'scalar',optional:true}],output:'image',space:'linear'},
   'film.grain@1':{inputs:[{name:'image',kind:'image',optional:false},{name:'mask',kind:'scalar',optional:true}],output:'image',space:'linear'},
   'film.halation@1':{inputs:[{name:'image',kind:'image',optional:false},{name:'mask',kind:'scalar',optional:true}],output:'image',space:'linear'},
+  'fill.inpaint@1':{inputs:[{name:'image',kind:'image',optional:false},{name:'plate',kind:'image',optional:false},{name:'mask',kind:'scalar',optional:true}],output:'image',space:'any'},
 };
 
 export type SourceDecl=
   |{type:'host-clip';clip:string}
   |{type:'cache'}
   |{type:'derive';method:'normals-from-depth@1';from:string;params:{smoothing:number}}
-  |{type:'estimate';model:string};
+  |{type:'estimate';model:string;hole?:{input:string;grow:number}};
 export interface InputDecl {
-  kind:'depth'|'normals'|'mask';
+  kind:'depth'|'normals'|'mask'|'image';
   semantics?:'relative-inverse'|'relative-depth'|'metric';
   frame?:'camera';
   required:boolean;
@@ -137,10 +143,15 @@ export interface ModelPin {
   name:string;upstream:string;revision:string;license:string;format:'onnx';opset:number;
   /** 64 lowercase hex chars once pinned. Anything else means "not pinned yet": the runtime must refuse to execute it unattended. */
   weightsSha256:string;
-  output:'relative-inverse'|'relative-depth'|'metric';
-  preprocess:{longSide:number;multipleOf:number;resize:'bicubic'|'bilinear';inputSpace:'sRGB - Texture';mean:RGB;std:RGB};
+  /** Depth semantics for depth models, 'probability' (0…1 per pixel) for segmentation, 'image' (sRGB 8-bit) for inpainting. */
+  output:'relative-inverse'|'relative-depth'|'metric'|'probability'|'image';
+  /**
+   * fit: 'aspect' (default) keeps the aspect ratio with the long side = longSide; 'stretch' resizes to longSide × longSide;
+   * 'native' feeds the source size unchanged as uint8 sRGB code values (mean/std unused; the model resizes internally).
+   */
+  preprocess:{longSide:number;multipleOf:number;resize:'bicubic'|'bilinear';inputSpace:'sRGB - Texture';mean:RGB;std:RGB;fit?:'aspect'|'stretch'|'native'};
   temporal?:{windowFrames:number;overlapFrames:number};
-  postprocess:{resize:'bilinear-to-source'};
+  postprocess:{resize:'bilinear-to-source';activation?:'sigmoid'};
 }
 export interface ColorManagement {config:string;input:SpaceName;output:SpaceName;working:{linear:SpaceName;display:SpaceName};}
 export interface BuckMeta {name:string;generator?:string;created?:string;author?:string;prompt?:string;license?:string;thumbnails?:{before?:string;after?:string};recipe?:string;}
@@ -163,7 +174,7 @@ export interface ScalarField {kind:'scalar';width:number;height:number;data:Floa
 export interface VectorField {kind:'vector3';width:number;height:number;data:Float32Array;}
 export type Buf=ImageBuf|ScalarField|VectorField;
 /** Aux channels bound to one shot (spec §6.4). Depth is normalized 0 = near … 1 = far, +Infinity = invalid/sky. */
-export interface AuxChannels {depth?:ScalarField;normals?:VectorField;masks:Record<string,ScalarField>;}
+export interface AuxChannels {depth?:ScalarField;normals?:VectorField;masks:Record<string,ScalarField>;/** Image inputs (e.g. an inpainted plate) by name. */images?:Record<string,ImageBuf>;}
 export interface RenderContext {
   /** Size of the source image; aux channels are resampled to it before nodes run. */
   width:number;height:number;

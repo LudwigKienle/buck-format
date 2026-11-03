@@ -6,7 +6,7 @@ import { NEUTRAL_LOOK, tintDirection } from '../color/look';
 import type { LookSpec } from '../color/look';
 import { SKY_PRESET_LABELS, skyPresetParams } from './nodes/sky';
 import { convertPixel, lumaWeights } from './colorspace';
-import { DEFAULT_DEPTH_MODEL, KNOWN_MODELS } from './depth/models';
+import { DEFAULT_DEPTH_MODEL, KNOWN_MODELS, depthSemantics } from './depth/models';
 import { canRebuildChain, ensureConversions, ensureInputs, insertByLevel } from './editor/chain';
 /**
  * Local, deterministic text → .buck graph. Spatial phrases (fog, depth of field, relight) become nodes; whatever text is
@@ -343,7 +343,7 @@ function halationSpec(pieces:Piece[],linear:SpaceName):OpticsSpec<HalationParams
 function depthInputs(relight:boolean){
   const id=DEFAULT_DEPTH_MODEL,pin=KNOWN_MODELS[id];
   if(!pin)throw new BuckError(`Das Standard-Tiefenmodell „${id}“ ist nicht registriert.`);
-  const depth:InputDecl={kind:'depth',semantics:pin.output,required:false,sources:[{type:'host-clip',clip:'Depth'},{type:'cache'},{type:'estimate',model:id}],
+  const depth:InputDecl={kind:'depth',semantics:depthSemantics(pin),required:false,sources:[{type:'host-clip',clip:'Depth'},{type:'cache'},{type:'estimate',model:id}],
     normalize:pin.output==='metric'?{mode:'none'}:{mode:'shot-percentile',low:2,high:98},onMissing:'bypass-dependents'};
   const inputs:Record<string,InputDecl>={depth};
   if(relight)inputs.normals={kind:'normals',frame:'camera',required:false,sources:[{type:'host-clip',clip:'Normals'},{type:'cache'},{type:'derive',method:'normals-from-depth@1',from:'depth',params:{smoothing:.002}}],onMissing:'bypass-dependents'};

@@ -3,6 +3,8 @@ import { describe,expect,it } from 'vitest';
 import type { BuckGraph,NodeType } from '../src/buck/types';
 import { BuckError,LIMITS } from '../src/buck/types';
 import { checkGraph,PARAM_RANGES,parseGraph,topoOrder } from '../src/buck/validate';
+import { withInpaint,withSkyMask } from '../src/buck/editor/ml';
+import { promptToGraph } from '../src/buck/prompt';
 type Obj=Record<string,unknown>;
 type Schema=boolean|Obj;
 const FIXTURE=readFileSync(new URL('./fixtures/buck/fargo-fog-warm.json',import.meta.url),'utf8');
@@ -88,6 +90,12 @@ describe('buck graph validator: valid graphs',()=>{
       node(g,'toDisplay').inputs.image='grain';
     });
     expect(checkGraph(g)).toEqual([]);expect(schemaValid(g)).toBe(true);
+  });
+  it('accepts sky and subject segmentation, an inpainted plate and fill.inpaint@1 in the schema too',()=>{
+    const g=withInpaint(withSkyMask(promptToGraph('Nacht').graph));
+    expect(checkGraph(g)).toEqual([]);expect(schemaValid(g)).toBe(true);
+    const bad=structuredClone(g);bad.inputs.plate.onMissing='constant';
+    expect(schemaValid(bad)).toBe(false);
   });
   it('accepts an empty graph whose output is $source',()=>{
     const g=mutate(g=>{g.nodes=[];g.output='$source';delete g.fallback;});

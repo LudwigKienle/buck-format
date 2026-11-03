@@ -12,7 +12,13 @@ vi.mock('../src/buck/depth/models',()=>({
   KNOWN_MODELS:{'fake-rel@1':{name:'Testmodell',upstream:'https://example.invalid/model',revision:'abc',license:'Apache-2.0',format:'onnx',opset:17,
     weightsSha256:'0'.repeat(64),output:'relative-inverse',
     preprocess:{longSide:518,multipleOf:14,resize:'bicubic',inputSpace:'sRGB - Texture',mean:[.485,.456,.406],std:[.229,.224,.225]},
-    postprocess:{resize:'bilinear-to-source'}}},
+    postprocess:{resize:'bilinear-to-source'}},
+    'migan-512@1':{name:'Test-Retusche',upstream:'https://example.invalid/inpaint',revision:'abc',license:'MIT',format:'onnx',opset:17,
+      weightsSha256:'1'.repeat(64),output:'image',
+      preprocess:{longSide:512,multipleOf:1,resize:'bilinear',inputSpace:'sRGB - Texture',mean:[0,0,0],std:[1,1,1],fit:'native'},
+      postprocess:{resize:'bilinear-to-source'}}},
+  INPAINT_MODEL:'migan-512@1',
+  depthSemantics:(pin:{output:string})=>pin.output,
 }));
 
 const FIXTURE_TEXT=readFileSync(new URL('./fixtures/buck/fargo-fog-warm.json',import.meta.url),'utf8');

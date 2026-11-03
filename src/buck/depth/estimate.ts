@@ -18,11 +18,16 @@ export type DepthWorkerMessage=
   |{id:number;type:'done';raw:ScalarField;weightsSha256:string;backend:DepthBackend}
   |{id:number;type:'error';message:string};
 
-/** Model input size: long side = longSide, short side keeps the aspect ratio, both rounded to multipleOf (min. one step). */
+/**
+ * Model input size: long side = longSide, short side keeps the aspect ratio, both rounded to multipleOf (min. one step).
+ * fit 'stretch' gives longSide × longSide, fit 'native' the source size.
+ */
 export function targetSize(width:number,height:number,pin:ModelPin){
   const {longSide,multipleOf}=pin.preprocess;
   if(!(Number.isInteger(longSide)&&Number.isInteger(multipleOf)&&multipleOf>0&&longSide>=multipleOf))throw new BuckError('Ungültige Vorverarbeitung im Modell-Pin (longSide/multipleOf).');
-  if(!(Number.isInteger(width)&&Number.isInteger(height)&&width>0&&height>0))throw new BuckError('Das Bild für die Tiefenschätzung ist leer.');
+  if(!(Number.isInteger(width)&&Number.isInteger(height)&&width>0&&height>0))throw new BuckError('Das Bild für die Modellauswertung ist leer.');
+  if(pin.preprocess.fit==='stretch')return {width:longSide,height:longSide};
+  if(pin.preprocess.fit==='native')return {width,height};
   const scale=longSide/Math.max(width,height),fit=(v:number)=>Math.max(multipleOf,Math.round(v*scale/multipleOf)*multipleOf);
   return {width:fit(width),height:fit(height)};
 }
@@ -78,17 +83,19 @@ export function checkPin(weightsSha256:string,pin:ModelPin,allowUnpinned:boolean
   }
   if(!allowUnpinned)throw new BuckError(`„${pin.name}“ ist nicht gepinnt (kein SHA-256 der Gewichte). Ungepinnte Modelle laufen nur nach ausdrücklicher Freigabe.`);
 }
-async function sha256(bytes:ArrayBuffer){
+export async function sha256(bytes:ArrayBuffer){
   const digest=new Uint8Array(await crypto.subtle.digest('SHA-256',bytes));
   return Array.from(digest,b=>b.toString(16).padStart(2,'0')).join('');
 }
-type Ort=typeof import('onnxruntime-web/webgpu');
+export type Ort=typeof import('onnxruntime-web/webgpu');
 let ortPromise:Promise<Ort>|undefined;
 function configure(ort:Ort,wasmUrl:string){
   const base=typeof location!=='undefined'?location.href:undefined;
   ort.env.wasm.wasmPaths={wasm:base?new URL(wasmUrl,base).href:wasmUrl};
   // Threads need crossOriginIsolated (COOP/COEP); otherwise ORT would warn and fall back to one thread anyway.
   ort.env.wasm.numThreads=globalThis.crossOriginIsolated?0:1;
+  // ORT logs constant-folding and EP-assignment notes as console errors; only real errors are worth showing.
+  ort.env.logLevel='error';
   return ort;
 }
 /**
@@ -120,6 +127,20 @@ async function createSession(ort:Ort,weights:Uint8Array){
     catch{/* WebGPU init or a kernel failed: retry on the CPU */}
   }
   return {session:await ort.InferenceSession.create(weights,{executionProviders:['wasm']}),backend:'wasm' as const};
+}
+export type Session=Awaited<ReturnType<Ort['InferenceSession']['create']>>;
+/**
+ * Shared front of every model run (depth, segmentation, inpainting): SHA-256 of the weights, pin check, lazy ONNX Runtime and
+ * a session (WebGPU with CPU fallback). The caller releases the session.
+ */
+export async function openModel(pin:ModelPin,weights:ArrayBuffer,allowUnpinned:boolean){
+  const weightsSha256=await sha256(weights);
+  checkPin(weightsSha256,pin,allowUnpinned);
+  let ort:Ort;
+  try{ort=await loadOrt();}catch(error){throw new BuckError(`ONNX Runtime konnte nicht geladen werden: ${error instanceof Error?error.message:String(error)}`);}
+  let created:{session:Session;backend:DepthBackend};
+  try{created=await createSession(ort,new Uint8Array(weights));}catch(error){throw new BuckError(`Das Modell ließ sich nicht laden: ${error instanceof Error?error.message:String(error)}`);}
+  return {ort,weightsSha256,...created};
 }
 /** Hash, pin check, preprocessing, inference and bilinear resize of the output to the source size (raw values). */
 export async function runDepthModel(image:ImageBuf,pin:ModelPin,weights:ArrayBuffer,opts?:DepthOptions):Promise<DepthResult>{

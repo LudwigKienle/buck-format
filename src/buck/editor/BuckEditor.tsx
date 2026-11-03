@@ -11,6 +11,7 @@ import { checkGraph, parseGraph } from '../validate';
 import { download, loadAsset, readImage, safeName } from '../../image';
 import type { ImageAsset } from '../../image';
 import { AuxPanel } from './AuxPanel';
+import { ModelsPanel } from './ModelsPanel';
 import { BuckViewer } from './BuckViewer';
 import { ensureConversions, ensureInputs, openForEditing } from './chain';
 import { NodeInspector } from './NodeInspector';
@@ -253,6 +254,7 @@ export function BuckEditor(){
         {result&&result.warnings.length>0&&<ul className="buck-warnings" aria-label="Warnungen">{result.warnings.map(w=><li key={w}><TriangleAlert size={13}/>{w}</li>)}</ul>}
         {result&&result.bypassed.length>0&&<p className="buck-note">Überbrückt: {result.bypassed.map(labelOf).join(', ')}</p>}
         <div ref={auxWrap} className="buck-aux-wrap"><AuxPanel graph={graph} source={source} aux={aux} setAux={setAux} updateGraph={updateGraph}/></div>
+        <ModelsPanel graph={graph} source={source} aux={aux} setAux={setAux} updateGraph={updateGraph}/>
       </main>
       <aside className="buck-col buck-right" aria-label="Parameter"><NodeInspector graph={graph} node={selectedNode} updateNode={updateNode} updateGraph={updateGraph} files={state.files} setFile={setFile}/></aside>
     </div>
