@@ -121,3 +121,57 @@ export function gaussianBlurWide(data:Float32Array,width:number,height:number,ch
   for(let y=0;y<height;y++)for(let x=0;x<width;x++)for(let c=0;c<channels;c++)out[(y*width+x)*channels+c]=sampleBilinear(blurred,w,h,channels,(x+.5)/f,(y+.5)/f,c);
   return out;
 }
+/** Mean over the (2r+1)² window clamped to the image (divides by the number of pixels inside). Single channel, O(N). */
+export function boxMean(src:Float32Array,w:number,h:number,r:number){
+  const tmp=new Float32Array(w*h),out=new Float32Array(w*h);
+  for(let y=0;y<h;y++){
+    const o=y*w;let s=0;for(let x=0;x<=Math.min(w-1,r);x++)s+=src[o+x];
+    for(let x=0;x<w;x++){
+      const lo=x-r-1,hi=x+r;if(x>0){if(hi<w)s+=src[o+hi];if(lo>=0)s-=src[o+lo];}
+      tmp[o+x]=s/(Math.min(w-1,hi)-Math.max(0,x-r)+1);
+    }
+  }
+  for(let x=0;x<w;x++){
+    let s=0;for(let y=0;y<=Math.min(h-1,r);y++)s+=tmp[y*w+x];
+    for(let y=0;y<h;y++){
+      const lo=y-r-1,hi=y+r;if(y>0){if(hi<h)s+=tmp[hi*w+x];if(lo>=0)s-=tmp[lo*w+x];}
+      out[y*w+x]=s/(Math.min(h-1,hi)-Math.max(0,y-r)+1);
+    }
+  }
+  return out;
+}
+/**
+ * Color-guided filter (He, Sun, Tang, "Guided Image Filtering", TPAMI 2013, Alg. 2), fast variant with subsampling
+ * (He & Sun 2015, arXiv:1505.00996): the linear coefficients are fitted on a grid subsampled by `s` and upsampled
+ * bilinearly; q = ā·I + b̄ is evaluated with the full-resolution guide. `guide` holds three planes, `p` the filtered field,
+ * r the window radius and eps the regularization, both in full-resolution units. Output follows the edges of the guide.
+ */
+export function guidedFilter(guide:Float32Array[],p:Float32Array,w:number,h:number,r:number,eps:number,s=1){
+  s=Math.max(1,Math.floor(s));
+  const sw=Math.max(1,Math.ceil(w/s)),sh=Math.max(1,Math.ceil(h/s)),sr=Math.max(1,Math.round(r/s)),n=sw*sh;
+  const down=(v:Float32Array)=>{
+    if(s===1)return v;
+    const o=new Float32Array(n);
+    for(let y=0;y<sh;y++)for(let x=0;x<sw;x++){const x1=Math.min(w,(x+1)*s),y1=Math.min(h,(y+1)*s);let t=0;for(let yy=y*s;yy<y1;yy++)for(let xx=x*s;xx<x1;xx++)t+=v[yy*w+xx];o[y*sw+x]=t/((x1-x*s)*(y1-y*s));}
+    return o;
+  };
+  const I=guide.map(down),P=down(p),box=(v:Float32Array)=>boxMean(v,sw,sh,sr),prod=(a:Float32Array,b:Float32Array)=>{const o=new Float32Array(n);for(let i=0;i<n;i++)o[i]=a[i]*b[i];return o;};
+  const mI=I.map(box),mP=box(P),mIP=I.map(c=>box(prod(c,P)));
+  const vRR=box(prod(I[0],I[0])),vRG=box(prod(I[0],I[1])),vRB=box(prod(I[0],I[2])),vGG=box(prod(I[1],I[1])),vGB=box(prod(I[1],I[2])),vBB=box(prod(I[2],I[2]));
+  const A=[0,1,2].map(()=>new Float32Array(n)),B=new Float32Array(n);
+  for(let i=0;i<n;i++){
+    const r0=mI[0][i],g0=mI[1][i],b0=mI[2][i],m=mP[i];
+    const cr=mIP[0][i]-r0*m,cg=mIP[1][i]-g0*m,cb=mIP[2][i]-b0*m;
+    const rr=vRR[i]-r0*r0+eps,rg=vRG[i]-r0*g0,rb=vRB[i]-r0*b0,gg=vGG[i]-g0*g0+eps,gb=vGB[i]-g0*b0,bb=vBB[i]-b0*b0+eps;
+    // Inverse of the symmetric 3×3 covariance (+eps·U) via cofactors.
+    const c00=gg*bb-gb*gb,c01=rb*gb-rg*bb,c02=rg*gb-rb*gg,c11=rr*bb-rb*rb,c12=rb*rg-rr*gb,c22=rr*gg-rg*rg,det=rr*c00+rg*c01+rb*c02;
+    const a0=(c00*cr+c01*cg+c02*cb)/det,a1=(c01*cr+c11*cg+c12*cb)/det,a2=(c02*cr+c12*cg+c22*cb)/det;
+    A[0][i]=a0;A[1][i]=a1;A[2][i]=a2;B[i]=m-a0*r0-a1*g0-a2*b0;
+  }
+  const mA=A.map(box),mB=box(B),q=new Float32Array(w*h);
+  for(let y=0;y<h;y++)for(let x=0;x<w;x++){
+    const i=y*w+x,fx=(x+.5)/s,fy=(y+.5)/s;
+    q[i]=sampleBilinear(mA[0],sw,sh,1,fx,fy,0)*guide[0][i]+sampleBilinear(mA[1],sw,sh,1,fx,fy,0)*guide[1][i]+sampleBilinear(mA[2],sw,sh,1,fx,fy,0)*guide[2][i]+sampleBilinear(mB,sw,sh,1,fx,fy,0);
+  }
+  return q;
+}

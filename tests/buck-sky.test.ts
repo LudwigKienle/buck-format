@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { autoHorizon, fbm, hash3, rawSkyMask, skyMatte, skyNode, skyPresetParams, SKY_PRESET_LABELS } from '../src/buck/nodes/sky';
+import { autoHorizon, cleanSkyMask, fbm, hash3, rawSkyMask, skyMatte, skyNode, skyPresetParams, SKY_PRESET_LABELS } from '../src/buck/nodes/sky';
 import { imageBuf, scalarField } from '../src/buck/field';
 import { lumaWeights } from '../src/buck/colorspace';
 import { promptToGraph, detectTimeOfDay } from '../src/buck/prompt';
@@ -44,14 +44,21 @@ describe('sky.replace@1 mask',()=>{
   it('without any sky returns the input unchanged (e.g. interiors)',()=>{
     const {img,d}=scene(8,8,0);expect(Array.from(run(img,d,params('golden-hour')).data)).toEqual(Array.from(img.data));
   });
-  it('has a soft edge of the given width where colors do not separate',()=>{
+  it('keeps a narrow soft edge at the depth boundary where colors do not separate',()=>{
     const raw=rawSkyMask(scene(64,32,16).d.data,2),flat=new Float32Array(64*32*4).fill(.3),m=skyMatte(flat,raw,64,32,4/64,lumaWeights('ACEScg'));
     const col=(y:number)=>m.alpha[y*64+32];
-    expect(col(14)).toBeGreaterThan(.5);expect(col(14)).toBeLessThan(1);expect(col(17)).toBeGreaterThan(0);expect(col(17)).toBeLessThan(.5);
+    expect(col(15)).toBeGreaterThan(.5);expect(col(15)).toBeLessThan(1);expect(col(16)).toBeGreaterThan(0);expect(col(16)).toBeLessThan(.5);
     expect(col(2)).toBe(1);expect(col(30)).toBe(0);
     for(let y=1;y<32;y++)expect(col(y)).toBeLessThanOrEqual(col(y-1)+1e-6);
-    // edge 0 is the hard depth mask.
-    expect(skyMatte(flat,raw,64,32,0,lumaWeights('ACEScg')).alpha).toBe(raw);
+    // edge 0 is the hard (cleaned) depth mask.
+    expect(Array.from(skyMatte(flat,raw,64,32,0,lumaWeights('ACEScg')).alpha)).toEqual(Array.from(raw));
+  });
+  it('drops sky islands below the sky (reflections in water), keeps enclosed holes above it',()=>{
+    // Sky rows 0…9; an enclosed hole at rows 4…5 inside a foreground block (x 20…29, rows 2…12); a reflection at rows 20…23.
+    const W=48,H=32,raw=new Float32Array(W*H);
+    for(let y=0;y<H;y++)for(let x=0;x<W;x++){const block=x>=20&&x<30&&y>=2&&y<13,hole=x>=23&&x<26&&y>=4&&y<6;raw[y*W+x]=y<10&&!block||hole||y>=20&&y<24&&x>=5&&x<15?1:0;}
+    const c=cleanSkyMask(raw,W,H);
+    expect(c[4*W+24]).toBe(1);expect(c[0]).toBe(1);expect(c[21*W+8]).toBe(0);expect(c[11*W+24]).toBe(0);
   });
   it('follows the color edge, not the depth edge, when sky and scene differ (unmixing)',()=>{
     // True edge at row 18; the depth mask stops at row 15 (3 rows of old sky with finite depth = halo).

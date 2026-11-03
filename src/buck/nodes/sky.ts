@@ -1,6 +1,6 @@
 import { convertIndexedToRgb, decode as decodePng } from 'fast-png';
 import { colorValueToRGB, convertPixel, isLinearSpace, lumaWeights } from '../colorspace';
-import { clamp01, gaussianBlur, gaussianBlurWide, imageBuf, sampleBilinear, smoothstep } from '../field';
+import { boxMean, clamp01, gaussianBlurWide, guidedFilter, imageBuf, sampleBilinear, smoothstep } from '../field';
 import { sanitizePng } from '../png';
 import { extremeFilter } from './masks';
 import { BuckError } from '../types';
@@ -144,34 +144,71 @@ function imageSky(p:P,ctx:{files:Map<string,Uint8Array>},space:SpaceName,W:numbe
 }
 
 /**
- * Matte: outside a band of ±edge image widths around the depth boundary alpha is the raw mask. Inside the band alpha is the
- * projection of the pixel color onto the line between the local foreground color F (masked mean outside the dilated mask) and
- * the local old sky color S (masked mean inside the eroded mask): a = clamp(⟨c−F, S−F⟩ / |S−F|²). Where F and S are too close
- * (relative distance below ~2 %), it falls back to the Gaussian-smoothed raw mask. edge = 0 gives the hard depth mask.
+ * Keeps the sky components that belong to the sky: 4-connected components of the raw mask touching the top border, plus
+ * every other component whose centroid lies above the lowest row of those (gaps between branches, enclosed holes).
+ * Components further down (sky reflected in water or glass, which depth models also report as far) are dropped.
+ * Without any component at the top border the mask is returned unchanged.
+ */
+export function cleanSkyMask(raw:Float32Array,W:number,H:number){
+  const n=W*H,label=new Int32Array(n).fill(-1),comps:{top:boolean;maxY:number;sumY:number;count:number}[]=[],stack:number[]=[];
+  for(let i=0;i<n;i++){
+    if(raw[i]<.5||label[i]>=0)continue;
+    const id=comps.length,c={top:false,maxY:0,sumY:0,count:0};comps.push(c);label[i]=id;stack.push(i);
+    while(stack.length){
+      const j=stack.pop()!,x=j%W,y=(j-x)/W;c.count++;c.sumY+=y;if(y>c.maxY)c.maxY=y;if(y===0)c.top=true;
+      for(const k of [x>0?j-1:-1,x<W-1?j+1:-1,y>0?j-W:-1,y<H-1?j+W:-1])if(k>=0&&label[k]<0&&raw[k]>=.5){label[k]=id;stack.push(k);}
+    }
+  }
+  let low=-1;for(const c of comps)if(c.top&&c.maxY>low)low=c.maxY;
+  if(low<0)return raw;
+  const keep=comps.map(c=>c.top||c.sumY/c.count<=low),out=new Float32Array(n);
+  for(let i=0;i<n;i++)out[i]=label[i]>=0&&keep[label[i]]?1:0;
+  return out;
+}
+/** Regularization of the guided filter (guide in cube-root encoded linear light, ~0…1.2). */
+const MATTE_EPS=1e-3;
+/**
+ * Matte, in three steps. (1) Outside a band of ±edge image widths (b px) around the cleaned depth boundary alpha is the
+ * cleaned mask. (2) Inside the band a color estimate: S = local old sky (masked Gaussian mean of in·erode(mask), σ = 2b),
+ * F = local foreground (same with 1 − dilate(mask)), a = smoothstep(0.15, 0.6, ⟨in − F, S − F⟩ / |S − F|²), blended with the mask by the
+ * separability conf = smoothstep(0.005, 0.03, |S − F|² / (Y(S)² + Y(F)² + 10⁻⁶)) · (1 − smoothstep(0.25, 1, e² / |S − F|²)), e being
+ * the distance of the pixel from the line F–S (a third color such as a cloud leaves the decision to the mask). (3) The color-guided filter (He, Sun,
+ * Tang 2013; radius max(1, round(b/3)), guide = cube root of the linear input, eps = MATTE_EPS) removes the noise of (2)
+ * while keeping the transition on the edges of the image; smoothstep(0.1, 0.9) pushes it toward 0/1, and the result is
+ * clamped between the color estimate and the mask (box-softened with the same radius), so the filter only decides where the
+ * two disagree. Also returns S for the
+ * compositing and the cleaned mask. edge = 0 gives the hard cleaned mask.
  */
 export function skyMatte(src:Float32Array,raw:Float32Array,W:number,H:number,edge:number,wt:RGB){
-  const n=W*H,b=Math.round(edge*W);
-  if(b<1)return {alpha:raw,oldSky:undefined,fg:undefined};
-  const dil=extremeFilter(raw,W,H,b,true),ero=extremeFilter(raw,W,H,b,false),sigma=2*b;
+  const n=W*H,b=Math.round(edge*W),mask=cleanSkyMask(raw,W,H);
+  if(b<1)return {alpha:mask,oldSky:undefined,fg:undefined,clean:mask};
+  const dil=extremeFilter(mask,W,H,b,true),ero=extremeFilter(mask,W,H,b,false),sigma=2*b;
   const sNum=new Float32Array(n*3),fNum=new Float32Array(n*3),fw=new Float32Array(n);
   for(let i=0;i<n;i++){fw[i]=1-dil[i];for(let c=0;c<3;c++){sNum[i*3+c]=src[i*4+c]*ero[i];fNum[i*3+c]=src[i*4+c]*fw[i];}}
   const sB=gaussianBlurWide(sNum,W,H,3,sigma),sW=gaussianBlurWide(ero,W,H,1,sigma),fB=gaussianBlurWide(fNum,W,H,3,sigma),fW=gaussianBlurWide(fw,W,H,1,sigma);
-  const smooth=gaussianBlur(raw,W,H,1,b/2),alpha=new Float32Array(raw),oldSky=new Float32Array(n*3),fg=new Float32Array(n*3);
-  const Y=(r:number,g:number,bb:number)=>wt[0]*r+wt[1]*g+wt[2]*bb;
+  const oldSky=new Float32Array(n*3),p=new Float32Array(mask),nb=Math.max(1,Math.round(b/2)),nDil=extremeFilter(mask,W,H,nb,true),nEro=extremeFilter(mask,W,H,nb,false);
+  for(let i=0;i<n;i++)for(let c=0;c<3;c++)oldSky[i*3+c]=sW[i]>1e-6?sB[i*3+c]/sW[i]:src[i*4+c];
   for(let i=0;i<n;i++){
-    const j=i*4;
-    // Old sky estimate everywhere (used for unmixing); falls back to the pixel itself where no sky core is near.
-    for(let c=0;c<3;c++)oldSky[i*3+c]=sW[i]>1e-6?sB[i*3+c]/sW[i]:src[j+c];
-    if(dil[i]===ero[i])continue;
-    const S=[oldSky[i*3],oldSky[i*3+1],oldSky[i*3+2]],F=fW[i]>1e-6?[fB[i*3]/fW[i],fB[i*3+1]/fW[i],fB[i*3+2]/fW[i]]:S;
-    fg[i*3]=F[0];fg[i*3+1]=F[1];fg[i*3+2]=F[2];
-    const d=[S[0]-F[0],S[1]-F[1],S[2]-F[2]],dd=d[0]*d[0]+d[1]*d[1]+d[2]*d[2],ys=Y(S[0],S[1],S[2]),yf=Y(F[0],F[1],F[2]);
-    const conf=smoothstep(.005,.03,dd/(ys*ys+yf*yf+1e-6));
-    const a=dd>0?clamp01(((src[j]-F[0])*d[0]+(src[j+1]-F[1])*d[1]+(src[j+2]-F[2])*d[2])/dd):smooth[i];
-    // The color-line estimate is pushed toward 0/1 (smoothstep 0.1…0.7, sky side favored): fewer half-transparent residues of the old sky.
-    alpha[i]=conf*smoothstep(.1,.7,a)+(1-conf)*smooth[i];
+    if(nDil[i]===nEro[i])continue;
+    const j=i*4,S=[oldSky[i*3],oldSky[i*3+1],oldSky[i*3+2]],F=fW[i]>1e-6?[fB[i*3]/fW[i],fB[i*3+1]/fW[i],fB[i*3+2]/fW[i]]:S;
+    const d=[S[0]-F[0],S[1]-F[1],S[2]-F[2]],dd=d[0]*d[0]+d[1]*d[1]+d[2]*d[2],ys=wt[0]*S[0]+wt[1]*S[1]+wt[2]*S[2],yf=wt[0]*F[0]+wt[1]*F[1]+wt[2]*F[2];
+    // Sky side favored (smoothstep 0.15…0.6): horizon haze is brighter than the sky core S and would otherwise keep ~20 %
+    // of the old sky as a grey band.
+    const t=dd>0?((src[j]-F[0])*d[0]+(src[j+1]-F[1])*d[1]+(src[j+2]-F[2])*d[2])/dd:0,a=dd>0?smoothstep(.15,.6,t):mask[i];
+    // A third color (a cloud between ridge and sky) lies off the line F–S: there the color estimate yields to the mask.
+    let off=0;for(let c=0;c<3;c++){const e=src[j+c]-F[c]-t*d[c];off+=e*e;}
+    const conf=smoothstep(.005,.03,dd/(ys*ys+yf*yf+1e-6))*(1-smoothstep(.25,1,dd>0?off/dd:1));
+    p[i]=conf*a+(1-conf)*mask[i];
   }
-  return {alpha,oldSky,fg};
+  const guide=[0,1,2].map(c=>{const g=new Float32Array(n);for(let i=0;i<n;i++)g[i]=Math.cbrt(Math.max(0,src[i*4+c]));return g;});
+  const r=Math.max(1,Math.round(b/3)),q=guidedFilter(guide,p,W,H,r,MATTE_EPS,Math.max(1,Math.floor(r/3))),alpha=new Float32Array(mask);
+  // The filter only decides between the two estimates: where mask and color estimate agree, their value holds (a cloud next
+  // to a ridge would otherwise lose alpha in a window that mixes three colors).
+  // The mask is softened by a box of the same radius so an edge without color contrast stays anti-aliased instead of binary.
+  const soft=boxMean(mask,W,H,r);
+  for(let i=0;i<n;i++)if(dil[i]!==ero[i]){const lo=Math.min(p[i],soft[i]),hi=Math.max(p[i],soft[i]);alpha[i]=Math.min(hi,Math.max(lo,smoothstep(.1,.9,q[i])));}
+  const fg=new Float32Array(n*3);for(let i=0;i<n;i++)for(let c=0;c<3;c++)fg[i*3+c]=fW[i]>1e-6?fB[i*3+c]/fW[i]:src[i*4+c];
+  return {alpha,oldSky,fg,clean:mask};
 }
 
 export const skyNode:NodeImpl<'sky.replace@1'>={
@@ -185,8 +222,8 @@ export const skyNode:NodeImpl<'sky.replace@1'>={
     if(depth.width!==W||depth.height!==H)throw new BuckError(`Himmel: Tiefe ${depth.width}×${depth.height} passt nicht zum Bild ${W}×${H}.`);
     const raw=rawSkyMask(depth.data,p.skyDepth),src=image.data,out:ImageBuf=imageBuf(W,H,image.space,new Float32Array(src));
     if(!raw.some(v=>v>0))return out;
-    const {alpha:mask,oldSky,fg}=skyMatte(src,raw,W,H,Math.max(0,p.edge),lumaWeights(image.space));
-    const hz=p.horizonY??autoHorizon(raw,W,H);
+    const {alpha:mask,oldSky,fg,clean}=skyMatte(src,raw,W,H,Math.max(0,p.edge),lumaWeights(image.space));
+    const hz=p.horizonY??autoHorizon(clean,W,H);
     const sky=p.source==='image'?imageSky(p,ctx,image.space,W,H):proceduralSky(p,image.space,ctx.workingLinear,W,H,hz);
     const o=out.data,spill=clamp01(p.spill);
     if(spill>0){
@@ -195,19 +232,23 @@ export const skyNode:NodeImpl<'sky.replace@1'>={
       for(let i=0;i<n;i++){const m=mask[i];sr+=sky[i*3]*m;sg+=sky[i*3+1]*m;sb+=sky[i*3+2]*m;}
       const y=wt[0]*sr+wt[1]*sg+wt[2]*sb;
       if(y>0){
-        const tint=[sr/y-1,sg/y-1,sb/y-1],near=gaussianBlurWide(raw,W,H,1,SKY.spillRadius*W);
+        const tint=[sr/y-1,sg/y-1,sb/y-1],near=gaussianBlurWide(clean,W,H,1,SKY.spillRadius*W);
         for(let i=0;i<n;i++){const k=spill*(.35+.65*clamp01(near[i]*2)),j=i*4;for(let c=0;c<3;c++)o[j+c]=src[j+c]*(1+k*tint[c]);}
       }
     }
-    // out = (1−a)·F' + a·sky. Partial pixels unmix the old sky: F' = (c − a·S_old)/(1 − a), clamped between c and F_local.
+    // out = (1 − a)·F' + a·sky. F' is the unmixed foreground (c − a·S)/(1 − a), but taken only as far along the line from c
+    // toward it as the box between c and the local foreground F allows, with one factor t for all channels: the color keeps
+    // its hue instead of being clamped channel by channel (which produced colored fringes).
     for(let i=0;i<n;i++){
       const a=mask[i];if(!(a>0))continue;
       const j=i*4;
       if(a>=1||!oldSky||!fg){for(let c=0;c<3;c++)o[j+c]+=(sky[i*3+c]-o[j+c])*Math.min(1,a);continue;}
+      let t=1;
       for(let c=0;c<3;c++){
-        const v=o[j+c],F=fg[i*3+c]>0?fg[i*3+c]:v,f=Math.min(Math.max(v,F),Math.max(Math.min(v,F),(v-a*oldSky[i*3+c])/(1-a)));
-        o[j+c]=(1-a)*f+a*sky[i*3+c];
+        const v=o[j+c],u=(v-a*oldSky[i*3+c])/(1-a),F=fg[i*3+c],lo=Math.min(v,F),hi=Math.max(v,F);
+        if(u<lo)t=Math.min(t,(v-lo)/(v-u));else if(u>hi)t=Math.min(t,(hi-v)/(u-v));
       }
+      for(let c=0;c<3;c++){const v=o[j+c],f=v+t*((v-a*oldSky[i*3+c])/(1-a)-v);o[j+c]=(1-a)*f+a*sky[i*3+c];}
     }
     return out;
   },
@@ -250,7 +291,7 @@ const r4=(x:number)=>Math.round(x*1e4)/1e4;
 export function skyPresetParams(preset:SkyPreset,working:SpaceName):SkyParams{
   const t=PRESET_TABLE[preset],c=(v:RGB):ColorValue=>(working==='lin_rec709_srgb'?v:convertPixel(v,'lin_rec709_srgb',working)).map(r4) as RGB;
   const p:SkyParams={source:'procedural',preset,zenith:c(t.z),horizon:c(t.h),gradientPower:t.pw,exposure:t.ev,glow:t.glow,glowColor:typeof t.gc==='number'?[1,1,1]:c(t.gc),
-    stars:t.stars,milkyWay:t.mw,clouds:t.cl,cloudContrast:t.cc,cloudScale:t.cs,cloudColor:c(t.cloud),aurora:t.aur,skyDepth:2,edge:.004,spill:t.spill};
+    stars:t.stars,milkyWay:t.mw,clouds:t.cl,cloudContrast:t.cc,cloudScale:t.cs,cloudColor:c(t.cloud),aurora:t.aur,skyDepth:2,edge:.01,spill:t.spill};
   if(t.moon)p.moon={x:t.moon.x,height:t.moon.height,radius:t.moon.radius,intensity:t.moon.intensity,color:{kelvin:t.moon.kelvin}};
   return p;
 }

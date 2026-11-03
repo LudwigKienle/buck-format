@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { gaussianBlur, gaussianKernel, resample, sampleBilinear } from '../src/buck/field';
+import { boxMean, gaussianBlur, gaussianKernel, guidedFilter, resample, sampleBilinear } from '../src/buck/field';
 
 /** Reference copies of the implementations before the performance rewrite (field.ts, prototype draft 0.1). */
 function refGaussianBlur(data:Float32Array,width:number,height:number,channels:number,sigma:number){
@@ -72,5 +72,28 @@ describe('field.sampleBilinear / resample (closure removed) are bit-identical to
   it('resamples up and down', () => {
     const d=field(31,17,4,11,'none');
     for(const [tw,th] of [[31,17],[62,34],[10,6],[1,1],[47,9]])expect(mismatches(resample(d,31,17,4,tw,th),refResample(d,31,17,4,tw,th))).toBe(0);
+  });
+});
+
+describe('boxMean and guidedFilter', () => {
+  it('box mean equals the brute-force clamped window mean', () => {
+    const w=13,h=9,v=new Float32Array(w*h).map((_,i)=>Math.sin(i*1.7)),r=3,b=boxMean(v,w,h,r);
+    for(let y=0;y<h;y++)for(let x=0;x<w;x++){
+      let s=0,k=0;for(let j=Math.max(0,y-r);j<=Math.min(h-1,y+r);j++)for(let i=Math.max(0,x-r);i<=Math.min(w-1,x+r);i++){s+=v[j*w+i];k++;}
+      expect(b[y*w+x]).toBeCloseTo(s/k,5);
+    }
+  });
+  it('reproduces the guide itself and moves a misplaced step onto the edge of the guide', () => {
+    // Guide: dark left, bright right (edge between x=15 and 16); input: a hard step at x=12 (the coarse mask).
+    const w=32,h=8,g=[0,1,2].map(()=>new Float32Array(w*h)),p=new Float32Array(w*h),tex=new Float32Array(w*h);
+    for(let y=0;y<h;y++)for(let x=0;x<w;x++){const i=y*w+x;for(const c of g)c[i]=x<16?.1:.9;p[i]=x>=12?1:0;tex[i]=g[0][i];}
+    for(const s of [1,2]){
+      // s = 1 only (float32, three identical guide channels make the covariance nearly singular): the subsampled variant
+      // interpolates the coefficients across the step and is only close away from it.
+      if(s===1){const id=guidedFilter(g,tex,w,h,3,1e-8,s);for(let i=0;i<w*h;i++)expect(id[i]).toBeCloseTo(tex[i],2);}
+      const q=guidedFilter(g,p,w,h,4,1e-4,s),jump=(x:number)=>Math.abs(q[4*w+x+1]-q[4*w+x]);
+      for(let x=16;x<21;x++)expect(q[4*w+x]).toBeGreaterThan(.95);
+      expect(jump(15)).toBeGreaterThan(2*jump(11));
+    }
   });
 });
