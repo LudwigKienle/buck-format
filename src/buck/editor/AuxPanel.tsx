@@ -16,6 +16,7 @@ import { missingInputs } from '../render';
 import { BuckError, LIMITS } from '../types';
 import type { AuxChannels, BuckGraph, ImageBuf, InputDecl, ModelPin, ScalarField, SourceDecl } from '../types';
 import { ensureInputs } from './chain';
+import { analysisImage } from './ml';
 import type { AuxState, DepthSourceKind, SourceImage, UpdateGraph } from './types';
 /**
  * Aux channel panel of the .buck editor (spec §6). Never downloads anything: model weights, depth maps and caches
@@ -197,7 +198,7 @@ export function AuxPanel({graph,source,aux,setAux,updateGraph}:Props){
     const t=begin(),ctrl=new AbortController();controller.current=ctrl;
     setAux(a=>({...a,progress:0}));
     try{
-      const r=await estimateToDepth(source.image,runPin,weights,depth?.decl,{signal:ctrl.signal,onProgress:p=>{if(token.current===t)setAux(a=>({...a,progress:p}));}});
+      const r=await estimateToDepth(analysisImage(ch,source.image),runPin,weights,depth?.decl,{signal:ctrl.signal,onProgress:p=>{if(token.current===t)setAux(a=>({...a,progress:p}));}});
       if(token.current===t)setDepth(r.depth,'estimate',r.label);
     }catch(e){
       if(token.current!==t)return;
@@ -237,7 +238,7 @@ export function AuxPanel({graph,source,aux,setAux,updateGraph}:Props){
   async function onHeuristic(){
     if(!source)return;
     const t=begin();
-    try{await tick();const d=heuristicDepth(source.image);if(token.current===t)setDepth(d,'heuristic',HEURISTIC_LABEL);}catch(e){if(token.current===t)fail(e);}
+    try{await tick();const d=heuristicDepth(analysisImage(ch,source.image));if(token.current===t)setDepth(d,'heuristic',HEURISTIC_LABEL);}catch(e){if(token.current===t)fail(e);}
   }
   async function onImport(file:File){
     const t=begin();

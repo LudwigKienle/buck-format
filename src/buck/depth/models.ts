@@ -62,6 +62,20 @@ export const KNOWN_MODELS:Record<string,ModelPin>={
     preprocess:{longSide:1024,multipleOf:32,resize:'bilinear',inputSpace:'sRGB - Texture',mean:IMAGENET_MEAN,std:IMAGENET_STD,fit:'stretch'},
     postprocess:{resize:'bilinear-to-source',activation:'sigmoid'},
   },
+  // danielgatis/rembg release v0.0.0, isnet-general-use.onnx (178 648 008 bytes, IS-Net "general use" weights of xuebinqin/DIS
+  // exported to ONNX, opset 13; MD5 equals the checksum rembg pins). Input [1,3,1024,1024], first output [1,1,1024,1024] is a sigmoid map.
+  // Preprocessing as in IS-Net/Inference.py: bilinear to 1024 × 1024, /255, mean 0.5, std 1. Upstream and rembg min-max normalize
+  // the output; this pin keeps the sigmoid values, as for skyseg-u2net@1, so an image without a subject stays low.
+  'isnet-general@1':{
+    name:'Motivmaske (IS-Net)',
+    upstream:'https://github.com/danielgatis/rembg/releases/tag/v0.0.0',
+    revision:'v0.0.0',
+    license:'Code Apache-2.0 (xuebinqin/DIS); für die Gewichte nennt das Projekt keine eigene Lizenz, Trainingsdaten DIS5K mit eigenen Nutzungsbedingungen',format:'onnx',opset:13,
+    weightsSha256:'60920e99c45464f2ba57bee2ad08c919a52bbf852739e96947fbb4358c0d964a',
+    output:'probability',
+    preprocess:{longSide:1024,multipleOf:32,resize:'bilinear',inputSpace:'sRGB - Texture',mean:[.5,.5,.5],std:[1,1,1],fit:'stretch'},
+    postprocess:{resize:'bilinear-to-source'},
+  },
   // andraniksargsyan/migan, migan_pipeline_v2.onnx (28 079 181 bytes, Picsart MI-GAN Places2 512, MIT). The exported pipeline
   // (scripts/create_onnx_pipeline.py) takes image uint8 [1,3,H,W] and mask uint8 [1,1,H,W] with 255 = keep, 0 = fill, crops
   // to the hole, inpaints at 512 × 512 and pastes back with a blurred seam; output uint8 [1,3,H,W]. A feed-forward GAN:
@@ -78,7 +92,9 @@ export const KNOWN_MODELS:Record<string,ModelPin>={
   },
 };
 export const DEFAULT_DEPTH_MODEL='da2-small-rel@1';
-export const SKY_MODEL='skyseg-u2net@1',SUBJECT_MODEL='birefnet-lite@1',INPAINT_MODEL='migan-512@1';
+export const SKY_MODEL='skyseg-u2net@1',SUBJECT_MODEL='isnet-general@1',INPAINT_MODEL='migan-512@1';
+/** Subject models the editor accepts; the file's SHA-256 decides which pin runs. SUBJECT_MODEL is what it declares by default. */
+export const SUBJECT_MODELS=[SUBJECT_MODEL,'birefnet-lite@1'];
 /** UI facts about each registry entry: whether it can run at all and which file the user has to install. */
 export const MODEL_INFO:Record<string,{available:boolean;file?:string;bytes?:number;note:string}>={
   'da2-small-rel@1':{available:true,file:'onnx/model.onnx',bytes:99060839,note:'Nur Standbilder, ohne zeitlichen Kopf. Gewichte bitte selbst installieren (Hugging Face, Apache-2.0).'},
@@ -87,6 +103,9 @@ export const MODEL_INFO:Record<string,{available:boolean;file?:string;bytes?:num
   // Tested 03.11.2026: WASM runs out of its 4 GB address space at 1024 px; WebGPU (ORT 1.31) needs 11 storage buffers per shader
   // stage, Apple GPUs offer 10. Runs only on GPUs with a higher limit.
   'birefnet-lite@1':{available:true,file:'onnx/model_fp16.onnx',bytes:114538221,note:'Trennt das Hauptmotiv (Person, Objekt) vom Hintergrund. Braucht WebGPU mit mindestens 11 Storage-Buffern je Shader; auf Apple-GPUs und ohne WebGPU läuft es nicht. Gewichte bitte selbst installieren (Hugging Face, MIT).'},
+  // Licence checked 04.11.2026: the DIS README puts only code and metric under Apache-2.0; DIS5K terms forbid commercial use of the
+  // dataset; xuebinqin/DIS#150 (commercial use of these weights) is open without an answer from the author.
+  'isnet-general@1':{available:true,file:'isnet-general-use.onnx',bytes:178648008,note:'Trennt das Hauptmotiv (Person, Objekt) vom Hintergrund und läuft auch auf Apple-GPUs und der CPU. Achtung: Kommerzielle Nutzung ist ungeklärt. Die Trainingsdaten (DIS5K) sind nur für nichtkommerzielle Forschung freigegeben, für die Gewichte nennt das Projekt keine eigene Lizenz. Gewichte bitte selbst installieren (GitHub, rembg).'},
   'migan-512@1':{available:true,file:'migan_pipeline_v2.onnx',bytes:28079181,note:'Füllt eine Maske aus der Umgebung auf, ohne Zufall und ohne Seed. Gewichte bitte selbst installieren (Hugging Face, MIT).'},
 };
 export const isPinned=(pin:ModelPin)=>/^[0-9a-f]{64}$/.test(pin.weightsSha256);

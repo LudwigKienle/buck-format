@@ -123,10 +123,10 @@ async function hasWebGpu(){
  */
 async function createSession(ort:Ort,weights:Uint8Array){
   if(await hasWebGpu()){
-    try{return {session:await ort.InferenceSession.create(weights,{executionProviders:['webgpu','wasm']}),backend:'webgpu' as const};}
+    try{return {session:await ort.InferenceSession.create(weights,{executionProviders:['webgpu','wasm'],logSeverityLevel:3}),backend:'webgpu' as const};}
     catch{/* WebGPU init or a kernel failed: retry on the CPU */}
   }
-  return {session:await ort.InferenceSession.create(weights,{executionProviders:['wasm']}),backend:'wasm' as const};
+  return {session:await ort.InferenceSession.create(weights,{executionProviders:['wasm'],logSeverityLevel:3}),backend:'wasm' as const};
 }
 export type Session=Awaited<ReturnType<Ort['InferenceSession']['create']>>;
 /**

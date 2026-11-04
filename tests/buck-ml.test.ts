@@ -1,12 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import { convertPixel } from '../src/buck/colorspace';
+import { readBuck, writeBuck } from '../src/buck/container';
 import { targetSize } from '../src/buck/depth/estimate';
 import { INPAINT_MODEL, KNOWN_MODELS, SKY_MODEL, SUBJECT_MODEL, depthSemantics } from '../src/buck/depth/models';
-import { PLATE_INPUT, SKY_INPUT, SUBJECT_INPUT, inpaintNodeOf, withInpaint, withSkyMask, withSubjectMask, withoutInpaint } from '../src/buck/editor/ml';
+import { levelOf } from '../src/buck/editor/chain';
+import { fillDepthHole } from '../src/buck/ml/fill';
+import { PLATE_INPUT, SKY_INPUT, SUBJECT_INPUT, analysisImage, inpaintNodeOf, withInpaint, withSkyMask, withSubjectMask, withoutInpaint } from '../src/buck/editor/ml';
 import { imageBuf, scalarField } from '../src/buck/field';
 import { holeFromMask } from '../src/buck/ml/run';
 import { skyNode, skyPresetParams } from '../src/buck/nodes/sky';
-import { promptToGraph } from '../src/buck/prompt';
+import { applyTimeOfDay, promptToGraph } from '../src/buck/prompt';
 import { renderGraph } from '../src/buck/render';
 import { checkGraph } from '../src/buck/validate';
 import type { BuckGraph, ImageBuf, RenderContext, Resolved, SkyParams } from '../src/buck/types';
@@ -29,6 +32,7 @@ describe('model pins for segmentation and inpainting',()=>{
   it('size the model input by fit: stretch to a square, native keeps the source',()=>{
     expect(targetSize(1600,905,KNOWN_MODELS[SKY_MODEL])).toEqual({width:320,height:320});
     expect(targetSize(1600,905,KNOWN_MODELS[SUBJECT_MODEL])).toEqual({width:1024,height:1024});
+    expect(targetSize(1600,905,KNOWN_MODELS['birefnet-lite@1'])).toEqual({width:1024,height:1024});
     expect(targetSize(1600,905,KNOWN_MODELS[INPAINT_MODEL])).toEqual({width:1600,height:905});
   });
 });
@@ -65,6 +69,14 @@ describe('editor helpers (editor/ml.ts)',()=>{
     expect(night(g)?.inputs.sky).toBe(`$${SKY_INPUT}`);expect(checkGraph(g)).toEqual([]);
     expect(g.inputs[SKY_INPUT].sources.some(s=>s.type==='estimate'&&s.model===SKY_MODEL)).toBe(true);
   });
+  it('declare the subject model that actually ran and keep it through the inpainting step',()=>{
+    const model=(g:BuckGraph)=>g.inputs[SUBJECT_INPUT].sources.flatMap(s=>s.type==='estimate'?[s.model]:[]);
+    expect(model(withSubjectMask(base()))).toEqual([SUBJECT_MODEL]);
+    const bi=withSubjectMask(withSubjectMask(base()),'birefnet-lite@1');
+    expect(model(bi)).toEqual(['birefnet-lite@1']);expect(checkGraph(bi)).toEqual([]);
+    expect(bi.models[SUBJECT_MODEL]).toBeUndefined();expect(bi.models['birefnet-lite@1']).toBeDefined();
+    expect(model(withInpaint(bi))).toEqual(['birefnet-lite@1']);
+  });
   it('add and remove the inpainting step with matching grow',()=>{
     const g=withInpaint(base(),.01),node=inpaintNodeOf(g)!;
     expect(node.inputs.plate).toBe(`$${PLATE_INPUT}`);
@@ -94,6 +106,40 @@ describe('fill.inpaint@1 through renderGraph',()=>{
     expect(px(12)).toBeCloseTo(convertPixel([.8,.8,.8],'sRGB - Display',g.colorManagement.output)[0],4);expect(px(2)).toBeCloseTo(.2,4);
     const missing=renderGraph(g,src,{frame:0,aux:{masks:{[SUBJECT_INPUT]:subject}},files:new Map()});
     expect(missing.bypassed).toContain(inpaintNodeOf(g)!.id);
+  });
+});
+
+describe('retouching comes first',()=>{
+  it('stays before the night exposure, in whichever order the steps are added',()=>{
+    const firstImage=(g:BuckGraph)=>g.nodes.filter(n=>n.type==='fill.inpaint@1'||n.type==='color.cdl@1').map(n=>n.type);
+    expect(firstImage(withInpaint(base()))[0]).toBe('fill.inpaint@1');
+    const later=applyTimeOfDay(withInpaint(promptToGraph('Fargo-Look').graph),'night').graph;
+    expect(firstImage(later)[0]).toBe('fill.inpaint@1');expect(checkGraph(later)).toEqual([]);
+    expect(levelOf(inpaintNodeOf(later)!)).toBe('light');
+  });
+  it('analysis uses the plate when there is one',()=>{
+    const src=imageBuf(2,2,'ACEScg'),plate=imageBuf(2,2,'sRGB - Display');
+    expect(analysisImage({masks:{}},src)).toBe(src);expect(analysisImage({masks:{},images:{[PLATE_INPUT]:plate}},src)).toBe(plate);
+  });
+});
+
+describe('fillDepthHole',()=>{
+  it('fills from the surroundings, keeps everything else and marks sky surroundings as invalid',()=>{
+    // Upper half sky (Inf), lower half depth 0.4; a figure (depth 0.1) in the middle column is the hole.
+    const w=21,h=20,d=scalarField(w,h),hole=scalarField(w,h);
+    for(let y=0;y<h;y++)for(let x=0;x<w;x++){const i=y*w+x,fig=x>=9&&x<12&&y>=2&&y<18;d.data[i]=fig?.1:y<10?Infinity:.4;hole.data[i]=fig?1:0;}
+    const o=fillDepthHole(d,hole).data;
+    expect(o[3*w+10]).toBe(Infinity);expect(o[16*w+10]).toBeCloseTo(.4,5);
+    expect(o[16*w+2]).toBeCloseTo(.4,5);expect(o[3*w+2]).toBe(Infinity);
+    for(let i=0;i<o.length;i++)expect(o[i]).not.toBeCloseTo(.1,5);
+  });
+});
+
+describe('.buck with sky, subject and plate',()=>{
+  it('survives writing and reading unchanged',async()=>{
+    const g=withInpaint(withSkyMask(base()));
+    const back=await readBuck(await writeBuck(g,new Map()));
+    expect(back.graph.inputs).toEqual(g.inputs);expect(back.graph.models).toEqual(g.models);expect(back.graph.nodes).toEqual(g.nodes);
   });
 });
 

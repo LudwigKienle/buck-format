@@ -53,10 +53,15 @@ The panel *Masken & Retusche* runs three more local models, each pinned by its S
 | Step | File | SHA-256 | License |
 |---|---|---|---|
 | Sky (incl. clouds), used by `sky.replace` instead of depth | [`skyseg_fp16.onnx`](https://huggingface.co/voyagerfromeast/skyseg/blob/d76f97cf68f049654f087d78d071dfd7505b2561/skyseg_fp16.onnx), 88 MB | `74d87f4a69378a610a6be662f859c38cfbdfdd75ff74bbfc54842965ed6fc9f7` | MIT |
-| Subject (person, object) as the `$subject` mask | [`onnx/model_fp16.onnx`](https://huggingface.co/onnx-community/BiRefNet_lite-ONNX/blob/de15b22ba131738a16dff04aab8bdf8dc32e3ac1/onnx/model_fp16.onnx) (BiRefNet lite), 115 MB | `d39b897ceb16ae654c1731f3dba0cf9b368d9cae74b5a57459b455cc8bfec402` | MIT |
+| Subject (person, object) as the `$subject` mask | [`isnet-general-use.onnx`](https://github.com/danielgatis/rembg/releases/download/v0.0.0/isnet-general-use.onnx) (IS-Net), 179 MB | `60920e99c45464f2ba57bee2ad08c919a52bbf852739e96947fbb4358c0d964a` | **Commercial use unclear**, see below |
+| Subject, alternative with a clear license (recognized by its hash) | [`onnx/model_fp16.onnx`](https://huggingface.co/onnx-community/BiRefNet_lite-ONNX/blob/de15b22ba131738a16dff04aab8bdf8dc32e3ac1/onnx/model_fp16.onnx) (BiRefNet lite), 115 MB | `d39b897ceb16ae654c1731f3dba0cf9b368d9cae74b5a57459b455cc8bfec402` | MIT |
 | Remove the subject (inpainting) | [`migan_pipeline_v2.onnx`](https://huggingface.co/andraniksargsyan/migan/blob/406830d0fa60666da0071c342ad2fbc8f30c5c64/migan_pipeline_v2.onnx) (MI-GAN), 28 MB | `6f1f3530a1a2324b19752018ce756088b07973cda8d7d890034ace5c8a48c40b` | MIT |
 
-Inpainting is a feed-forward GAN: no noise, no seed, the same input gives the same plate on the same backend. The plate is shot data like depth; the `.buck` file only declares it and the `fill.inpaint@1` node. Known limit: BiRefNet lite needs WebGPU with at least 11 storage buffers per shader stage, so it does not run on Apple GPUs (10) or on the CPU (WebAssembly memory). Sky segmentation and MI-GAN run everywhere.
+Inpainting is a feed-forward GAN: no noise, no seed, the same input gives the same plate on the same backend. The plate is shot data like depth; the `.buck` file only declares it and the `fill.inpaint@1` node. Once a subject is removed, sky and depth are analyzed on the cleaned image; the retouch runs first in the chain, so exposure and grade act on it too.
+
+**IS-Net license:** the [DIS repository](https://github.com/xuebinqin/DIS) puts only its code and metric under Apache-2.0 and names no license for the weights. The training set DIS5K is limited to non-commercial research, and [the question about commercial use of these weights](https://github.com/xuebinqin/DIS/issues/150) is open without an answer from the author. For commercial work, clarify this yourself or use BiRefNet.
+
+**Hardware:** BiRefNet lite needs WebGPU with at least 11 storage buffers per shader stage, so it does not run on Apple GPUs (10) or on the CPU (WebAssembly memory). IS-Net, sky segmentation and MI-GAN run on GPU and CPU. All of this works per image, without temporal smoothing, so masks and plates flicker on video.
 
 ## Specification
 

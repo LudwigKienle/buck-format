@@ -1,6 +1,6 @@
 import { INPAINT_MODEL, SKY_MODEL, SUBJECT_MODEL } from '../depth/models';
 import { BuckError } from '../types';
-import type { BuckGraph, BuckNode, InputDecl } from '../types';
+import type { AuxChannels, BuckGraph, BuckNode, ImageBuf, InputDecl } from '../types';
 import { ensureInputs, insertByLevel, removeNode, uniqueId } from './chain';
 /**
  * Graph side of the segmentation and inpainting models (spec §6.5): declared inputs with an estimate source and the nodes
@@ -16,8 +16,16 @@ const declare=(graph:BuckGraph,name:string,decl:InputDecl):BuckGraph=>({...graph
 
 /** Declares `$sky` (sky segmentation); ensureInputs then connects it to every sky.replace@1. */
 export const withSkyMask=(graph:BuckGraph)=>ensureInputs(declare(graph,SKY_INPUT,graph.inputs[SKY_INPUT]?.kind==='mask'?graph.inputs[SKY_INPUT]:maskInput(SKY_MODEL)));
-/** Declares `$subject` (subject segmentation), usable by mask.input@1 and as the hole of the inpainting plate. */
-export const withSubjectMask=(graph:BuckGraph)=>ensureInputs(declare(graph,SUBJECT_INPUT,graph.inputs[SUBJECT_INPUT]?.kind==='mask'?graph.inputs[SUBJECT_INPUT]:maskInput(SUBJECT_MODEL)));
+/** Declares `$subject` (subject segmentation by `model`), usable by mask.input@1 and as the hole of the inpainting plate. */
+export const withSubjectMask=(graph:BuckGraph,model=SUBJECT_MODEL)=>{
+  const cur=graph.inputs[SUBJECT_INPUT];
+  // An existing declaration keeps its other sources; only the estimate source follows the model that actually ran.
+  const decl:InputDecl=cur?.kind==='mask'?{...cur,sources:[...cur.sources.filter(s=>s.type!=='estimate'),{type:'estimate',model}]}:maskInput(model);
+  return ensureInputs(declare(graph,SUBJECT_INPUT,decl));
+};
+
+/** Image every analysis (sky, depth) runs on: the plate when a subject was removed, otherwise the source. */
+export const analysisImage=(channels:AuxChannels,source:ImageBuf)=>channels.images?.[PLATE_INPUT]??source;
 
 /** The fill node of the "remove subject" step, if the graph has one. */
 export const inpaintNodeOf=(graph:BuckGraph)=>graph.nodes.find(n=>n.type==='fill.inpaint@1'&&n.inputs.plate===`$${PLATE_INPUT}`);
@@ -29,7 +37,8 @@ export const inpaintNodeOf=(graph:BuckGraph)=>graph.nodes.find(n=>n.type==='fill
  */
 export function withInpaint(graph:BuckGraph,grow=DEFAULT_GROW):BuckGraph{
   if(!(grow>=0&&grow<=.1))throw new BuckError('Die Erweiterung der Retuschemaske muss zwischen 0 und 0,1 Bildbreiten liegen.');
-  let g=withSubjectMask(withoutInpaint(graph));
+  const before=withoutInpaint(graph);
+  let g=before.inputs[SUBJECT_INPUT]?.kind==='mask'?before:withSubjectMask(before);
   g=declare(g,PLATE_INPUT,plateInput(grow));
   const src=uniqueId(g,'subjectMask'),refine=uniqueId({...g,nodes:[...g.nodes,{id:src} as BuckNode]},'holeMask');
   const masks:BuckNode[]=[

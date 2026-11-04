@@ -1,11 +1,14 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import type { ChangeEvent, ReactNode } from 'react';
 import { Cloud, Eraser, ScanFace, Trash2, X } from 'lucide-react';
-import { INPAINT_MODEL, KNOWN_MODELS, MODEL_INFO, SKY_MODEL, SUBJECT_MODEL } from '../depth/models';
+import { sha256Hex } from '../container';
+import { INPAINT_MODEL, KNOWN_MODELS, MODEL_INFO, SKY_MODEL, SUBJECT_MODEL, SUBJECT_MODELS } from '../depth/models';
+import { HEURISTIC_LABEL, heuristicDepth } from '../depth/heuristic';
+import { fillDepthHole } from '../ml/fill';
 import { runMlJob } from '../ml/run';
 import type { MaskResult, PlateResult } from '../ml/run';
-import type { BuckGraph } from '../types';
-import { DEFAULT_GROW, PLATE_INPUT, SKY_INPUT, SUBJECT_INPUT, inpaintNodeOf, withInpaint, withSkyMask, withSubjectMask, withoutInpaint } from './ml';
+import type { BuckGraph, ImageBuf, ScalarField } from '../types';
+import { DEFAULT_GROW, PLATE_INPUT, SKY_INPUT, SUBJECT_INPUT, analysisImage, inpaintNodeOf, withInpaint, withSkyMask, withSubjectMask, withoutInpaint } from './ml';
 import type { AuxState, SourceImage, UpdateGraph } from './types';
 /**
  * Segmentation and inpainting (spec §6.5) in the .buck editor. Like depth, the weights come only from files the user picks;
@@ -24,27 +27,59 @@ export function ModelsPanel({graph,source,aux,setAux,updateGraph}:Props){
   const uid=useId(),[running,setRunning]=useState<Step>(),[progress,setProgress]=useState<number>(),[error,setError]=useState<string>(),[notice,setNotice]=useState<string>();
   const files={sky:useRef<HTMLInputElement>(null),subject:useRef<HTMLInputElement>(null),inpaint:useRef<HTMLInputElement>(null)};
   const controller=useRef<AbortController|undefined>(undefined);
+  // Kept for this session: removing or restoring the subject changes the image, so the sky has to be detected again.
+  const skyWeights=useRef<ArrayBuffer|undefined>(undefined);
   useEffect(()=>()=>controller.current?.abort(),[]);
   const masks=aux.channels.masks,plate=aux.channels.images?.[PLATE_INPUT],busy=!!running||aux.busy;
   const hasStep=!!inpaintNodeOf(graph);
 
+  /**
+   * After the image changed (subject removed or restored): sky and depth are detected again on `image`, because they still show
+   * the old content. The sky model runs again with the weights of this session; the stand-in depth is recomputed; a model or
+   * loaded depth cannot run here, so it is patched inside the hole (when one is given) and flagged. Returns a note for the user.
+   */
+  async function reanalyze(image:ImageBuf,hole:ScalarField|undefined,signal:AbortSignal):Promise<string>{
+    const notes:string[]=[];
+    if(aux.depthSource==='heuristic'){
+      const depth=heuristicDepth(image);
+      setAux(a=>({...a,channels:{...a.channels,depth,normals:undefined},depthLabel:`${HEURISTIC_LABEL} – keine echte Tiefenschätzung`}));
+    }else if(aux.channels.depth){
+      if(hole)setAux(a=>a.channels.depth?{...a,channels:{...a.channels,depth:fillDepthHole(a.channels.depth,hole),normals:undefined}}:a);
+      notes.push('Die Tiefe bitte unter „Hilfskanäle“ neu schätzen, sie stammt noch aus dem vorherigen Bild.');
+    }
+    if(masks[SKY_INPUT]){
+      if(skyWeights.current){
+        const r=await runMlJob({task:'mask',image,pin:KNOWN_MODELS[SKY_MODEL],weights:skyWeights.current,allowUnpinned:false},{signal}) as MaskResult;
+        setAux(a=>({...a,channels:{...a.channels,masks:{...a.channels.masks,[SKY_INPUT]:r.mask}}}));
+      }else notes.push('Den Himmel bitte neu erkennen, die Maske stammt noch aus dem vorherigen Bild.');
+    }
+    return notes.join(' ');
+  }
   async function run(step:Step,file:File){
     if(!source)return;
-    const pin=KNOWN_MODELS[MODEL[step]],ctrl=new AbortController();controller.current=ctrl;
+    const ctrl=new AbortController();controller.current=ctrl;
     setRunning(step);setProgress(0);setError(undefined);setNotice(undefined);
     try{
       const weights=await file.arrayBuffer(),opts={signal:ctrl.signal,onProgress:setProgress};
+      // Two subject models are registered: the file's hash decides which pin runs (an unknown file fails the pin check of the default).
+      let modelId=MODEL[step];
+      if(step==='subject'){const sha=await sha256Hex(new Uint8Array(weights));modelId=SUBJECT_MODELS.find(id=>KNOWN_MODELS[id].weightsSha256===sha)??SUBJECT_MODEL;}
+      const pin=KNOWN_MODELS[modelId];
       if(step==='inpaint'){
         const subject=masks[SUBJECT_INPUT];if(!subject)throw new Error('Zuerst das Motiv erkennen.');
         const r=await runMlJob({task:'inpaint',image:source.image,pin,weights,allowUnpinned:false,mask:subject,grow:DEFAULT_GROW},opts) as PlateResult;
         setAux(a=>({...a,channels:{...a.channels,images:{...a.channels.images,[PLATE_INPUT]:r.plate}}}));
         updateGraph(g=>withInpaint(g,DEFAULT_GROW));
-        setNotice(`Motiv entfernt · ${pin.name} · sha256 ${r.weightsSha256.slice(0,8)}… · ${r.backend==='webgpu'?'WebGPU':'WASM'}`);
+        const note=await reanalyze(r.plate,r.hole,ctrl.signal);
+        setNotice(`Motiv entfernt · ${pin.name} · sha256 ${r.weightsSha256.slice(0,8)}… · ${r.backend==='webgpu'?'WebGPU':'WASM'}${note?` · ${note}`:''}`);
       }else{
-        const r=await runMlJob({task:'mask',image:source.image,pin,weights,allowUnpinned:false},opts) as MaskResult;
+        // The sky is read from the cleaned image; the subject always from the source (on the plate it is gone).
+        const image=step==='sky'?analysisImage(aux.channels,source.image):source.image;
+        const r=await runMlJob({task:'mask',image,pin,weights,allowUnpinned:false},opts) as MaskResult;
+        if(step==='sky')skyWeights.current=weights;
         const name=step==='sky'?SKY_INPUT:SUBJECT_INPUT;
         setAux(a=>({...a,channels:{...a.channels,masks:{...a.channels.masks,[name]:r.mask}}}));
-        updateGraph(g=>step==='sky'?withSkyMask(g):withSubjectMask(g));
+        updateGraph(g=>step==='sky'?withSkyMask(g):withSubjectMask(g,modelId));
         setNotice(`${step==='sky'?'Himmelsmaske':'Motivmaske'} · ${pin.name} · sha256 ${r.weightsSha256.slice(0,8)}… · ${r.backend==='webgpu'?'WebGPU':'WASM'}`);
       }
     }catch(e){
@@ -56,6 +91,16 @@ export function ModelsPanel({graph,source,aux,setAux,updateGraph}:Props){
         setError(/bad_alloc|memory|Speicher/i.test(m)?`${m} – Das Modell braucht mehr Speicher, als WebAssembly hat.`:/storage buffers/i.test(m)?`${m} – Diese Grafikkarte erlaubt zu wenige Speicherpuffer je Shader für das Modell.`:m);
       }
     }finally{if(controller.current===ctrl)controller.current=undefined;setRunning(undefined);setProgress(undefined);}
+  }
+  async function removeStep(){
+    updateGraph(withoutInpaint);
+    setAux(a=>{const {[PLATE_INPUT]:_x,...images}=a.channels.images??{};void _x;return {...a,channels:{...a.channels,images}};});
+    if(!source)return;
+    const ctrl=new AbortController();controller.current=ctrl;
+    setRunning('sky');setError(undefined);setNotice(undefined);
+    try{const note=await reanalyze(source.image,undefined,ctrl.signal);setNotice(`Retusche entfernt.${note?` ${note}`:''}`);}
+    catch(e){if(!ctrl.signal.aborted)setError(message(e));}
+    finally{if(controller.current===ctrl)controller.current=undefined;setRunning(undefined);}
   }
   const pick=(step:Step)=>(e:ChangeEvent<HTMLInputElement>)=>{const f=e.target.files?.[0];e.target.value='';if(f)void run(step,f);};
   const dropMask=(name:string)=>setAux(a=>{const {[name]:_x,...rest}=a.channels.masks;void _x;return {...a,channels:{...a.channels,masks:rest}};});
@@ -86,13 +131,14 @@ export function ModelsPanel({graph,source,aux,setAux,updateGraph}:Props){
       {masks[SKY_INPUT]&&<button type="button" className="buck-button buck-tool" style={BTN} disabled={busy} onClick={()=>dropMask(SKY_INPUT)}><Trash2 size={14}/>Himmelsmaske verwerfen</button>}
 
       <h3 style={H3}>Motiv {masks[SUBJECT_INPUT]?'· erkannt':''}</h3>
-      {row('subject',<ScanFace size={14}/>,'Motiv erkennen',true,'Läuft am besten mit WebGPU')}
+      {row('subject',<ScanFace size={14}/>,'Motiv erkennen',true)}
+      <p className="buck-note" style={NOTE}>Alternative mit klarer MIT-Lizenz: {KNOWN_MODELS['birefnet-lite@1'].name}, Datei <code>{MODEL_INFO['birefnet-lite@1'].file}</code> {mb(MODEL_INFO['birefnet-lite@1'].bytes)}. Sie wird am Hash erkannt, braucht aber WebGPU mit mindestens 11 Storage-Buffern je Shader und läuft daher nicht auf Apple-GPUs.</p>
       {masks[SUBJECT_INPUT]&&<p className="buck-note" style={NOTE}>Als Eingabe <code>$subject</code> verfügbar, etwa für „Maske aus Eingabe“ oder die Retusche.</p>}
 
       <h3 style={H3}>Retusche {hasStep?'· aktiv':''}</h3>
       {row('inpaint',<Eraser size={14}/>,'Motiv entfernen',!!masks[SUBJECT_INPUT],'Zuerst das Motiv erkennen')}
       {hasStep&&!plate&&<p className="buck-note buck-warning" style={NOTE} role="note">Der Look enthält eine Retusche, für dieses Bild fehlt aber die gefüllte Fassung. Sie wird übersprungen, bis „Motiv entfernen“ erneut läuft.</p>}
-      {hasStep&&<button type="button" className="buck-button buck-tool" style={BTN} disabled={busy} onClick={()=>{updateGraph(withoutInpaint);setAux(a=>{const {[PLATE_INPUT]:_x,...images}=a.channels.images??{};void _x;return {...a,channels:{...a.channels,images}};});}}><Trash2 size={14}/>Retusche entfernen</button>}
+      {hasStep&&<button type="button" className="buck-button buck-tool" style={BTN} disabled={busy} onClick={()=>void removeStep()}><Trash2 size={14}/>Retusche entfernen</button>}
     </div>
   </section>;
 }

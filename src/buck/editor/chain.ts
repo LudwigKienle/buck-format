@@ -129,7 +129,8 @@ export const LEVELS:{id:Level;label:string;description:string}[]=[
 ];
 const LEVEL_INDEX:Record<Level,number>={light:0,atmosphere:1,optics:2,grade:3};
 /** Order inside a level: lens before film, sky before fog, exposure before added light (10 per level). */
-const SUB_RANK:Partial<Record<NodeType,number>>={'fill.inpaint@1':0,'light.relight@1':1,'light.practicals@1':2,'sky.replace@1':10,'atmos.fog@1':11,
+// Retouching comes before everything (rank −1): every later node, scene exposure included, must also act on the plate.
+const SUB_RANK:Partial<Record<NodeType,number>>={'fill.inpaint@1':-1,'light.relight@1':1,'light.practicals@1':2,'sky.replace@1':10,'atmos.fog@1':11,
   'lens.dof@1':20,'lens.vignette@1':21,'film.halation@1':22,'film.grain@1':23};
 /**
  * Level of an image node: color.cdl@1 in a linear space is scene exposure (light), in a display space grade; look and 3D-LUT
@@ -140,7 +141,7 @@ export function levelOf(n:BuckNode):Level|undefined{
     case 'color.cdl@1':return LINEAR_SPACES.includes(n.params.space)?'light':'grade';
     case 'color.look@1':case 'color.lut3d@1':return 'grade';
   }
-  const r=SUB_RANK[n.type];return r===undefined?undefined:LEVELS[Math.floor(r/10)].id;
+  const r=SUB_RANK[n.type];return r===undefined?undefined:LEVELS[Math.max(0,Math.floor(r/10))].id;
 }
 /** Fine rank for insertion: level·10 + position inside the level; undefined without a level. */
 export function levelRank(n:BuckNode):number|undefined{
