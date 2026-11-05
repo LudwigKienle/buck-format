@@ -2,7 +2,8 @@ import { createHash } from 'node:crypto';
 import { afterEach,describe,expect,it,vi } from 'vitest';
 import { checkPin,estimateDepth,preprocess,runDepthModel,targetSize } from '../src/buck/depth/estimate';
 import type { DepthWorkerMessage,DepthWorkerRequest } from '../src/buck/depth/estimate';
-import { heuristicDepth,HEURISTIC_LABEL } from '../src/buck/depth/heuristic';
+import { heuristicDepth,heuristicNormals,HEURISTIC_LABEL } from '../src/buck/depth/heuristic';
+import { normalsFromDepth } from '../src/buck/aux/normals';
 import { DEFAULT_DEPTH_MODEL,isPinned,KNOWN_MODELS,MODEL_INFO } from '../src/buck/depth/models';
 import { imageBuf,scalarField } from '../src/buck/field';
 import { BuckError } from '../src/buck/types';
@@ -249,6 +250,32 @@ describe('heuristicDepth',()=>{
     for(const x of [130,160,190])expect(inf(x,53)).toBe(false);
     let ridge=0;for(let y=86;y<98;y++)for(let x=250;x<310;x++)if(inf(x,y))ridge++;
     expect(ridge).toBeLessThan(60*12*.1);
+  });
+  it('does not take a smooth brown ceiling at the top border for sky, but keeps a sky gap of the same color',()=>{
+    // Blue sky left, a textured wall (x 180…239), a smooth brown ceiling behind it at the top right, a narrow sky gap inside the wall.
+    const w=320,h=180,img=imageBuf(w,h,'lin_rec709_srgb');
+    for(let y=0;y<h;y++)for(let x=0;x<w;x++){
+      const i=(y*w+x)*4,n=((x*7+y*13)%11)/11,gap=x>=200&&x<214&&y<40;
+      const c=y>=100?[.55+.3*n,.42+.25*n,.25+.2*n]:gap||x<180?[.45+.1*y/h,.62+.05*y/h,.9]:x<240?[.3+.3*n,.28+.25*n,.25+.2*n]:[.3,.2,.1];
+      img.data[i]=c[0];img.data[i+1]=c[1];img.data[i+2]=c[2];img.data[i+3]=1;
+    }
+    const d=heuristicDepth(img),inf=(x:number,y:number)=>d.data[y*w+x]===Infinity;
+    expect(inf(60,20)).toBe(true);expect(inf(207,15)).toBe(true);
+    expect(inf(290,20)).toBe(false);expect(inf(290,60)).toBe(false);
+  });
+  it('gives the stand-in depth normals that never face away from the sky: no dark blobs from near patches',()=>{
+    // A near blob in the upper half: its depth gradient flips, so normals derived from it would face down.
+    const w=64,h=48,d=scalarField(w,h);
+    for(let y=0;y<h;y++)for(let x=0;x<w;x++){const r=Math.hypot(x-32,y-16);d.data[y*w+x]=y<4?Infinity:Math.max(0,1-y/h-(r<8?.6:0));}
+    const derived=normalsFromDepth(d,0),n=heuristicNormals(d);
+    let down=0,zero=0,other=0;
+    for(let y=0;y<h;y++)for(let x=0;x<w;x++){
+      const j=(y*w+x)*3,ok=Number.isFinite(d.data[y*w+x]);
+      if(!ok){if(n.data[j]===0&&n.data[j+1]===0&&n.data[j+2]===0)zero++;else other++;continue;}
+      expect(n.data[j+1]).toBeGreaterThanOrEqual(-1e-4);expect(Math.hypot(n.data[j],n.data[j+1],n.data[j+2])).toBeCloseTo(1,4);
+      if(derived.data[j+1]<-.1)down++;
+    }
+    expect(down).toBeGreaterThan(0);expect(other).toBe(0);expect(zero).toBe(w*4);
   });
   it('counts a bright cloud that touches a ridge as sky',()=>{
     // Ground below y=100, a textured peak (x 150…170, top y=38) and a smooth white cloud (x 100…170, y 30…42) resting on it.

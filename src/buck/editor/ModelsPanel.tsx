@@ -3,7 +3,7 @@ import type { ChangeEvent, ReactNode } from 'react';
 import { Cloud, Eraser, ScanFace, Trash2, X } from 'lucide-react';
 import { sha256Hex } from '../container';
 import { INPAINT_MODEL, KNOWN_MODELS, MODEL_INFO, SKY_MODEL, SUBJECT_MODEL, SUBJECT_MODELS } from '../depth/models';
-import { HEURISTIC_LABEL, heuristicDepth } from '../depth/heuristic';
+import { HEURISTIC_LABEL, heuristicDepth, heuristicNormals } from '../depth/heuristic';
 import { fillDepthHole } from '../ml/fill';
 import { runMlJob } from '../ml/run';
 import type { MaskResult, PlateResult } from '../ml/run';
@@ -42,7 +42,7 @@ export function ModelsPanel({graph,source,aux,setAux,updateGraph}:Props){
     const notes:string[]=[];
     if(aux.depthSource==='heuristic'){
       const depth=heuristicDepth(image);
-      setAux(a=>({...a,channels:{...a.channels,depth,normals:undefined},depthLabel:`${HEURISTIC_LABEL} – keine echte Tiefenschätzung`}));
+      setAux(a=>({...a,channels:{...a.channels,depth,normals:heuristicNormals(depth)},depthLabel:`${HEURISTIC_LABEL} – keine echte Tiefenschätzung`}));
     }else if(aux.channels.depth){
       if(hole)setAux(a=>a.channels.depth?{...a,channels:{...a.channels,depth:fillDepthHole(a.channels.depth,hole),normals:undefined}}:a);
       notes.push('Die Tiefe bitte unter „Hilfskanäle“ neu schätzen, sie stammt noch aus dem vorherigen Bild.');

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Check, FilePlus, FlaskConical, FolderOpen, ImageUp, LoaderCircle, Save, Sparkles, TriangleAlert, X } from 'lucide-react';
 import { isLinearSpace, toSRGB8 } from '../colorspace';
 import { missingFiles, readBuck, writeBuck } from '../container';
-import { HEURISTIC_LABEL, heuristicDepth } from '../depth/heuristic';
+import { HEURISTIC_LABEL, heuristicDepth, heuristicNormals } from '../depth/heuristic';
 import { imageBuf } from '../field';
 import { emptyGraph, promptToGraph } from '../prompt';
 import { BUCK_MIMETYPE, LIMITS, PORTS } from '../types';
@@ -40,7 +40,7 @@ function toImageBuf(asset:ImageAsset,space:SpaceName):ImageBuf {
   if(asset.floatPixels)data.set(asset.floatPixels);else for(let i=0;i<data.length;i++)data[i]=asset.pixels[i]/255;
   return imageBuf(asset.width,asset.height,space,data);
 }
-const heuristicAux=(image:ImageBuf):AuxState=>({channels:{depth:heuristicDepth(image),masks:{}},depthSource:'heuristic',depthLabel:`${HEURISTIC_LABEL} – keine echte Tiefenschätzung`,busy:false});
+const heuristicAux=(image:ImageBuf):AuxState=>{const depth=heuristicDepth(image);return {channels:{depth,normals:heuristicNormals(depth),masks:{}},depthSource:'heuristic',depthLabel:`${HEURISTIC_LABEL} – keine echte Tiefenschätzung`,busy:false};};
 /** lut3d and mask.image files: the only archive entries the user supplies; baked LUTs, fallback and thumbnails are rebuilt on save. */
 const nodeFiles=(g:BuckGraph)=>new Set(g.nodes.flatMap(n=>n.type==='color.lut3d@1'||n.type==='mask.image@1'?[n.params.file]:[]));
 const lookUnderstood=(g:BuckGraph)=>g.nodes.flatMap(n=>n.type==='color.look@1'?n.params.understood??[]:[]);

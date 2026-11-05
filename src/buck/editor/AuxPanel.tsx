@@ -8,7 +8,7 @@ import { EXR_MAGIC, readExr } from '../aux/exr';
 import { normalizeDepth } from '../aux/normalize';
 import { sha256Hex } from '../container';
 import { checkPin, estimateDepth } from '../depth/estimate';
-import { HEURISTIC_LABEL, heuristicDepth } from '../depth/heuristic';
+import { HEURISTIC_LABEL, heuristicDepth, heuristicNormals } from '../depth/heuristic';
 import { DEFAULT_DEPTH_MODEL, KNOWN_MODELS, MODEL_INFO, depthSemantics, isPinned } from '../depth/models';
 import { resample, scalarField } from '../field';
 import { hasPngMagic, sanitizePng } from '../png';
@@ -191,7 +191,7 @@ export function AuxPanel({graph,source,aux,setAux,updateGraph}:Props){
 
   const fail=(e:unknown)=>setAux(a=>({...a,busy:false,progress:undefined,error:message(e)}));
   const begin=()=>{setNotice(undefined);setAux(a=>({...a,busy:true,progress:undefined,error:undefined}));return ++token.current;};
-  const setDepth=(d:ScalarField,kind:DepthSourceKind,label:string)=>setAux(a=>({...a,channels:{...a.channels,depth:d,normals:undefined},depthSource:kind,depthLabel:label,busy:false,progress:undefined,error:undefined}));
+  const setDepth=(d:ScalarField,kind:DepthSourceKind,label:string)=>setAux(a=>({...a,channels:{...a.channels,depth:d,normals:kind==='heuristic'?heuristicNormals(d):undefined},depthSource:kind,depthLabel:label,busy:false,progress:undefined,error:undefined}));
 
   async function run(runPin:ModelPin,weights:ArrayBuffer){
     if(!source)return;

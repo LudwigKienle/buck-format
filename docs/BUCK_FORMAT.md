@@ -858,6 +858,7 @@ Der Prototyp unter `src/buck/` ist eine TypeScript-Referenz im Browser und in No
 - **Phase 3** (OFX, C++-Referenz) hat noch nicht begonnen.
 - **Segmentierung und Retusche (neu, §6.5, §5.3.9):** Eingabeart `image`, Schätzquellen für Masken und Bilder, Pins `skyseg-u2net@1`, `isnet-general@1`, `birefnet-lite@1`, `migan-512@1`, Knoten `fill.inpaint@1`, optionaler `sky`-Eingang an `sky.replace@1`. Im Editor das Panel „Masken & Retusche“.
 - **Änderungen der Referenzmathematik im Entwurf:** 03.11.2026, `sky.replace@1`: Bereinigung der Himmelsmaske (gespiegelter Himmel entfällt), Matte aus Farbschätzung plus farbgeführtem Guided Filter statt Gauß-Kante, farbtonerhaltende Entmischung im Komposit, Standard `edge` der Vorlagen 0,004 → 0,01 (§5.3.4). Ohne Tiefenmodell sucht die Behelfstiefe den Himmel feiner (bis 1024 px, Wolken an Graten eingeschlossen).
+- **Behelfstiefe im Editor** (nicht Teil des Formats, 05.11.2026): Ihre Flecken sind keine Flächen. Normalen daraus zeigten teils vom Licht weg und ließen beim Relight dunkle Flecken stehen. Der Editor setzt deshalb eigene Normalen: nur die Annahme „weiter oben im Bild = weiter weg“, je Spalte monoton und stark geglättet. Deklarierte Normalen leiten sich weiter aus der Tiefe ab (`normals-from-depth@1`). Die bildbasierte Himmelssuche verwirft zusätzlich Regionen anderer Farbe, etwa eine glatte Gewölbedecke am oberen Bildrand.
 
 ### Phase 1 – Spezifikation (dieses Dokument)
 

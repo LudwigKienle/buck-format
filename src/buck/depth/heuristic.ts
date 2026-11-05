@@ -1,8 +1,9 @@
 import { convertImage } from '../colorspace';
-import { clamp01, gaussianBlur, gaussianBlurWide, resample, scalarField } from '../field';
+import { normalsFromDepth } from '../aux/normals';
+import { clamp01, gaussianBlur, gaussianBlurWide, resample, scalarField, vectorField } from '../field';
 import { extremeFilter } from '../nodes/masks';
 import { BuckError } from '../types';
-import type { ImageBuf, ScalarField } from '../types';
+import type { ImageBuf, ScalarField, VectorField } from '../types';
 import { skyRegion } from '../reference/timeofday';
 /**
  * BEHELF, keine Tiefenmessung: a deterministic monocular guess for when no model or depth upload is available.
@@ -83,9 +84,13 @@ function markSky(srgb:Float32Array,W:number,H:number,[r,g,b]:Float32Array[],dept
   const s=Math.min(1,REFINE_SIDE/Math.max(W,H)),rw=Math.max(1,Math.round(W*s)),rh=Math.max(1,Math.round(H*s));
   const mask=new Float32Array(n);for(let i=0;i<n;i++)mask[i]=sky.mask[i];
   const fine=refineSky(downscale(srgb,W,H,rw,rh),resample(mask,w,h,1,rw,rh),rw,rh),up=resample(fine,rw,rh,1,W,H);
-  for(let i=0;i<out.length;i++)if(up[i]>=.5)out[i]=Infinity;
+  // refineSky stops a pixel or two short of a silhouette. Those pixels of old sky would count as ground and catch added light
+  // (a bright line along every edge), so the mask reaches over them; the color matte of sky.replace then finds the exact edge.
+  const hard=new Float32Array(out.length);for(let i=0;i<out.length;i++)hard[i]=up[i]>=.5?1:0;
+  const reach=extremeFilter(hard,W,H,Math.max(1,Math.round(SKY_REACH*W)),true);
+  for(let i=0;i<out.length;i++)if(reach[i]>0)out[i]=Infinity;
 }
-const REFINE_SIDE=1024,REFINE_BAND=.035,CLOUD_RUN=.15,CLOUD_LUMA=.8;
+const SKY_REACH=.0015,REFINE_SIDE=1024,REFINE_BAND=.035,CLOUD_RUN=.15,CLOUD_LUMA=.8,CLOUD_STEP=.02,CLOUD_SD=.03;
 /**
  * The coarse sky search accepts only smooth pixels, so it stops short of every silhouette by roughly its blur radius. Inside a
  * band of REFINE_BAND image widths around the coarse sky, a pixel joins the sky when (1) its color lies within half the
@@ -123,6 +128,7 @@ function refineSky(planes:Float32Array[],coarse:Float32Array,w:number,h:number){
   // non-sky pixels with sky directly above and below (at most CLOUD_RUN image heights long) floats in the sky; it joins when
   // its mean luminance is at least CLOUD_LUMA of the local sky's. Ridges, trees and figures have ground below them.
   const luma=(v:(c:number)=>number)=>.2126*v(0)+.7152*v(1)+.0722*v(2),maxRun=Math.max(1,Math.round(CLOUD_RUN*h));
+  const cloud:number[]=[];
   for(let x=0;x<w;x++){
     let y=1;
     while(y<h-1){
@@ -131,9 +137,19 @@ function refineSky(planes:Float32Array[],coarse:Float32Array,w:number,h:number){
       if(e<h&&e-y<=maxRun){
         let yc=0,ys=0,k=0;
         for(let t=y;t<e;t++){const i=t*w+x;yc+=luma(c=>planes[c][i]);if(sW[i]>1e-4){ys+=luma(c=>sB[i*3+c]/sW[i]);k++;}}
-        if(k&&yc>=CLOUD_LUMA*ys)for(let t=y;t<e;t++)sky[t*w+x]=1;
+        if(k&&yc>=CLOUD_LUMA*ys)for(let t=y;t<e;t++){const i=t*w+x;sky[i]=1;cloud.push(i);}
       }
       y=e+1;
+    }
+  }
+  // The columns that rest on the ridge have no sky below and would stay behind with a straight edge: the cloud grows sideways from
+  // the runs found above into 4-connected pixels of nearly the same color (a darker ridge or a textured wall stops it).
+  for(let q=0;q<cloud.length;q++){
+    const i=cloud[q],x=i%w,y=(i-x)/w;
+    for(const j of [x>0?i-1:-1,x<w-1?i+1:-1,y>0?i-w:-1,y<h-1?i+w:-1]){
+      if(j<0||sky[j]||sd[j]>CLOUD_SD)continue;
+      let far=false;for(let c=0;c<3;c++)if(Math.abs(planes[c][j]-planes[c][i])>CLOUD_STEP)far=true;
+      if(!far){sky[j]=1;cloud.push(j);}
     }
   }
   return sky;
@@ -146,6 +162,45 @@ function localLogStd([r,g,b]:Float32Array[],w:number,h:number){
     let s=0,s2=0,k=0;
     for(let j=Math.max(0,y-1);j<=Math.min(h-1,y+1);j++)for(let i=Math.max(0,x-1);i<=Math.min(w-1,x+1);i++){const v=l[j*w+i];s+=v;s2+=v*v;k++;}
     const m=s/k;out[y*w+x]=Math.sqrt(Math.max(0,s2/k-m*m));
+  }
+  return out;
+}
+const NORMAL_SIGMA=.04,NORMAL_SCALE=.2,NORMAL_GRID=256;
+/**
+ * Normals for the stand-in depth. Its bumps are no surfaces: a "near" blob above something farther (a figure, the front of a
+ * mesa) would give normals facing down, away from any light, and relight would leave dark smudges there. So only a ground
+ * assumption is used: per column the depth may only grow toward the top of the image (running maximum from the bottom), then
+ * a wide blur (NORMAL_SIGMA image widths) and a flatter scale (NORMAL_SCALE, the depth has no real scale). Normals thus face
+ * upward with a gentle variation, invalid depth (sky) stays (0,0,0). Editor stand-in only; declared normals still derive from depth.
+ */
+export function heuristicNormals(depth:ScalarField):VectorField {
+  const {width:W,height:H,data}=depth,mono=new Float32Array(W*H);
+  for(let x=0;x<W;x++){
+    let m=0;
+    for(let y=H-1;y>=0;y--){const v=data[y*W+x];if(Number.isFinite(v)&&v>m)m=v;mono[y*W+x]=m;}
+  }
+  // On a small grid and interpolated afterwards: the fields are smooth anyway, and gradients of a blur upsampled at full size would show its grid.
+  const s=Math.min(1,NORMAL_GRID/Math.max(W,H)),w=Math.max(1,Math.round(W*s)),h=Math.max(1,Math.round(H*s));
+  const soft=gaussianBlur(boxDown(mono,W,H,w,h),w,h,1,NORMAL_SIGMA*w);
+  for(let i=0;i<soft.length;i++)soft[i]*=NORMAL_SCALE;
+  const up=resample(normalsFromDepth(scalarField(w,h,soft),0).data,w,h,3,W,H),out=vectorField(W,H),o=out.data;
+  for(let i=0;i<W*H;i++){
+    if(!Number.isFinite(data[i]))continue; // invalid depth keeps (0,0,0)
+    const j=i*3,len=Math.hypot(up[j],up[j+1],up[j+2])||1;
+    o[j]=up[j]/len;o[j+1]=up[j+1]/len;o[j+2]=up[j+2]/len;
+  }
+  return out;
+}
+/** Area-average downscale of one scalar plane. */
+function boxDown(src:Float32Array,W:number,H:number,w:number,h:number){
+  const out=new Float32Array(w*h);
+  for(let y=0;y<h;y++){
+    const y0=Math.floor(y*H/h),y1=Math.max(y0+1,Math.floor((y+1)*H/h));
+    for(let x=0;x<w;x++){
+      const x0=Math.floor(x*W/w),x1=Math.max(x0+1,Math.floor((x+1)*W/w));
+      let t=0;for(let yy=y0;yy<y1;yy++)for(let xx=x0;xx<x1;xx++)t+=src[yy*W+xx];
+      out[y*w+x]=t/((y1-y0)*(x1-x0));
+    }
   }
   return out;
 }

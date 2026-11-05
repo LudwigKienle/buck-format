@@ -39,10 +39,32 @@ export function skyRegion(work:Work,imageFallback=true):SkyRegion{
   for(let i=0;i<n;i++){const x=i%w,y=(i-x)/w;if(!mask[i]&&(x===0||y===0||x===w-1||y===h-1)){outside[i]=1;q2.push(i);}}
   for(let q=0;q<q2.length;q++){const i=q2[q],x=i%w,y=(i-x)/w;for(const j of [x>0?i-1:-1,x<w-1?i+1:-1,y>0?i-w:-1,y<h-1?i+w:-1])if(j>=0&&!mask[j]&&!outside[j]){outside[j]=1;q2.push(j);}}
   for(let i=0;i<n;i++)if(!mask[i]&&!outside[i])mask[i]=1;
+  dropForeignRegions(mask,rgb,w,h);
   let s=0,my=0;for(let i=0;i<n;i++)if(mask[i]){s++;my+=Math.floor(i/w);}
   if(s/n<.03||my/s>h*.5||s/n>.8)return {mask:new Uint8Array(n),kind:'none',share:0,horizon:h/w/2};
   return finish(mask,w,h,'image');
 }
+/**
+ * A smooth surface at the top border (an arch ceiling, a wall) passes the sky search too. Of the separate 4-connected regions the
+ * largest is taken as the sky; any other whose mean chromaticity differs from it by more than FOREIGN_CHROMA is removed. Gaps between
+ * branches show the same sky and stay.
+ */
+function dropForeignRegions(mask:Uint8Array,rgb:Float32Array,w:number,h:number){
+  const n=w*h,label=new Int32Array(n).fill(-1),regions:{count:number;r:number;g:number;b:number}[]=[],stack:number[]=[];
+  for(let i=0;i<n;i++){
+    if(!mask[i]||label[i]>=0)continue;
+    const id=regions.length,c={count:0,r:0,g:0,b:0};regions.push(c);label[i]=id;stack.push(i);
+    while(stack.length){
+      const j=stack.pop()!,x=j%w,y=(j-x)/w;c.count++;c.r+=rgb[j*3];c.g+=rgb[j*3+1];c.b+=rgb[j*3+2];
+      for(const k of [x>0?j-1:-1,x<w-1?j+1:-1,y>0?j-w:-1,y<h-1?j+w:-1])if(k>=0&&mask[k]&&label[k]<0){label[k]=id;stack.push(k);}
+    }
+  }
+  if(regions.length<2)return;
+  const chroma=(c:{r:number;g:number;b:number})=>{const t=c.r+c.g+c.b+1e-6;return [c.r/t,c.b/t];},main=chroma(regions.reduce((a,b)=>b.count>a.count?b:a));
+  const foreign=regions.map(c=>{const q=chroma(c);return Math.hypot(q[0]-main[0],q[1]-main[1])>FOREIGN_CHROMA;});
+  for(let i=0;i<n;i++)if(mask[i]&&foreign[label[i]])mask[i]=0;
+}
+const FOREIGN_CHROMA=.08;
 function finish(mask:Uint8Array,w:number,h:number,kind:SkyRegion['kind']):SkyRegion{
   let s=0;const f=new Float32Array(mask.length);for(let i=0;i<mask.length;i++){f[i]=mask[i];s+=mask[i];}
   return {mask,kind,share:s/mask.length,horizon:autoHorizon(f,w,h)};
